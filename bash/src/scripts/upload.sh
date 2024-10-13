@@ -1,21 +1,33 @@
 #!/usr/bin/bash
 
-# Check if a double-quoted sentence argument is provided
-if [[ $# -gt 0 && "$1" =~ ^\".*\"$ ]]; then
-    # Double-quoted sentence argument found
-    message="$1"
-    echo "Detected message: $message"
+message="Minor update"
 
-    # Rest of your upload logic (e.g., git add, upload command)
-    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        echo "Git repository detected, adding all changes..."
-        git add .
-        git commit -m "$message"
-        git push
+# Check if current dir is within a Git repository
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+
+    # Check for changes
+    if git diff-index --quiet HEAD --; then
+        printf "No changes to commit. Releasing message: %s\n\n" "${message}"
+        git status -v --long
     else
-        echo "Not a Git repository, skipping 'git add'."
+        # Get commit message from argument or default
+        if [[ $# -gt 0 && "$1" =~ ^\".*\"$ ]]; then
+            message="$1"
+        fi
+
+        # Prompt for confirmation
+        read -r -p "Commit and push changes with message: '$message'? [y/N] " response
+        if [[ "$response" =~ ^[Yy]$ ]]; then
+            git add .
+            git commit -m "$message" && git push
+            printf "\n\n"
+            git status -v --long
+            printf "\n\n"
+        else
+            echo "Aborting commit and push."
+        fi
     fi
 
 else
-    check
+    echo "Not a Git repository, skipping git commands"
 fi
