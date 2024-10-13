@@ -1,6 +1,6 @@
 #!/usr/bin/bash
 
-message="Minor update"
+message="Repository is up to date"
 
 # Check if current dir is within a Git repository
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -13,6 +13,8 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         # Get commit message from argument or default
         if [[ $# -gt 0 && "$1" =~ ^\".*\"$ ]]; then
             message="$1"
+        else
+            message="Minor update"
         fi
 
         # Prompt for confirmation
