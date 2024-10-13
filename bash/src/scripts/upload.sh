@@ -7,7 +7,7 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 
     # Check for changes
     if git diff-index --quiet HEAD --; then
-        printf "No changes to commit. Releasing message: %s\n\n" "${message}"
+        printf "No changes to commit. %s\n\n" "${message}"
         git status -v --long
     else
         # Get commit message from argument or default
