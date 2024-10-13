@@ -22,6 +22,7 @@ Right now, I'm diving into:
 
 Here's a glimpse into the tools I'm currently using:
 
+- **Platform:** Ubuntu (22.04.2 LTS)
 - **Code Editor:** Visual Studio Code (v1.82.2)
 - **C Compiler:** GCC (v11.3.0)
 - **Bash Shell:** Bash (v5.1.16)
@@ -33,4 +34,5 @@ Here's a glimpse into the tools I'm currently using:
 While this is primarily a personal learning space, I'm always open to feedback and suggestions. Feel free to open an issue if you have any ideas or spot any areas for improvement!
 
 Let's build something awesome together! 🚀
+
 # bash-lab
