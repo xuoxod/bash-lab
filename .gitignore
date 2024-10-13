@@ -23,14 +23,7 @@ btdisc*
 .env
 *.env
 
-build
-.build
-build*
-dist
-.dist
-dist*
-compiled
-.compiled
-compiled*
-scratch
-.scratch
+./build
+./dist
+./compiled
+./scratch

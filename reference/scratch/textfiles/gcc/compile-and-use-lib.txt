@@ -1,0 +1,31 @@
+gcc -c libbluetoothdiscovery.c -o libbluetoothdiscovery.o 
+gcc main.c libbluetoothdiscovery.o -lbluetooth -o bluetooth_app
+
+#include <stdio.h>
+#include "libbluetoothdiscovery.h"
+
+int main() {
+    if (bluetooth_init() != BT_SUCCESS) {
+        fprintf(stderr, "Bluetooth initialization failed!\n");
+        return 1;
+    }
+
+    if (bluetooth_start_discovery() != BT_SUCCESS) {
+        fprintf(stderr, "Bluetooth discovery start failed!\n");
+        return 1;
+    }
+
+    // ... (wait for some time to discover devices) ...
+
+    int num_devices;
+    BluetoothDevice *devices = bluetooth_get_devices(&num_devices);
+    if (devices != NULL) {
+        for (int i = 0; i < num_devices; i++) {
+            printf("Device %d: %s (%s)\n", i + 1, devices[i].name, devices[i].address);
+        }
+        bluetooth_free_devices(devices);
+    }
+
+    bluetooth_stop_discovery();
+    return 0;
+}
