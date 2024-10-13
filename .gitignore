@@ -1,0 +1,36 @@
+# Compiled object files
+*.o
+
+# Executable files
+btdisc*
+*.out
+
+# Shared libraries
+*.so
+
+# Log files
+*.log
+
+# Temporary files
+*~
+*.swp
+*.tmp
+
+# Editor and IDE specific files
+.vscode/
+.idea/
+
+.env
+*.env
+
+build
+.build
+build*
+dist
+.dist
+dist*
+compiled
+.compiled
+compiled*
+scratch
+.scratch
