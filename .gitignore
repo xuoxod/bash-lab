@@ -22,8 +22,3 @@ btdisc*
 
 .env
 *.env
-
-./build
-./dist
-./compiled
-./scratch
