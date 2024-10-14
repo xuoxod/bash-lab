@@ -14,8 +14,7 @@
 #include <bluetooth/hci.h>
 #include <bluetooth/hci_lib.h>
 #include <bluetooth/rfcomm.h>
-
-
+#include <termios.h> // For colored text output
 
 // Define ANSI color codes for terminal output
 #define ANSI_COLOR_RED     "\x1b[31m"
@@ -30,7 +29,7 @@
 #define BRIGHT_GREEN      "\x1b[92m"
 #define BRIGHT_PINK       "\x1b[95m"
 #define BRIGHT_BLUE       "\x1b[94m"
-#define BRIGHT_CYAN        "\x1b[96m" // This was missing!
+#define BRIGHT_CYAN        "\x1b[96m" 
 
 // Structure to hold Bluetooth device information
 typedef struct {
@@ -134,55 +133,15 @@ int choose_device(BluetoothDeviceInfo *devices, int num_devices) {
     return choice - 1; // Adjust the choice to be zero-based
 }
 
-// Function to check if a device supports RFCOMM
-// This function is kept for informational purposes, but it's not
-// strictly necessary for the connection process.
-int check_rfcomm_support(int dev_id, const char *mac_address) {
-    int sock;
-    struct hci_dev_info dev_info;
-    uint8_t features[8];
 
-    // Open a socket to the Bluetooth adapter
-    sock = socket(AF_BLUETOOTH, SOCK_RAW, BTPROTO_HCI);
-    if (sock < 0) {
-        perror("Failed to open HCI socket");
-        return -1;
-    }
-
-    // Set the device ID
-    dev_info.dev_id = dev_id;
-
-    // Get the device information
-    if (ioctl(sock, HCIGETDEVINFO, (void *)&dev_info) < 0) {
-        perror("Failed to get device information");
-        close(sock);
-        return -1;
-    }
-
-    // Read the local features
-    if (hci_read_local_features(sock, features, 1000) < 0) {
-        perror("Failed to read local features");
-        close(sock);
-        return -1;
-    }
-
-    // Check if the 3rd bit of the 5th byte is set, indicating RFCOMM support
-    if (features[4] & 0x04) {
-        printf("RFCOMM is supported!\n");
-    } else {
-        printf("RFCOMM is not supported.\n");
-    }
-
-    close(sock);
-    return 0;
-}
-
-// Function to connect to a Bluetooth device
+// Function to connect to a Bluetooth device with detailed status messages
 int connect_to_device(const char *mac_address, int channel) {
     struct sockaddr_rc addr = {0};
     int sock, status;
+    struct timeval timeout;
 
     // Allocate a socket
+    printf(ANSI_COLOR_YELLOW "   Creating socket...\n" ANSI_COLOR_RESET);
     sock = socket(AF_BLUETOOTH, SOCK_STREAM, BTPROTO_RFCOMM);
     if (sock < 0) {
         perror("socket");
@@ -190,16 +149,13 @@ int connect_to_device(const char *mac_address, int channel) {
     }
 
     // Set connection parameters
+    printf(ANSI_COLOR_YELLOW "   Setting connection parameters...\n" ANSI_COLOR_RESET);
     addr.rc_family = AF_BLUETOOTH;
     str2ba(mac_address, &addr.rc_bdaddr);
     addr.rc_channel = (uint8_t)channel;
 
-    // Connect to the server
-    printf(BRIGHT_BLUE "Connecting to %s on channel %d...\n" ANSI_COLOR_RESET, mac_address, channel);
-
     // Set a timeout for the connection attempt
-    struct timeval timeout;
-    timeout.tv_sec = 5; // Set timeout to 5 seconds
+    timeout.tv_sec = 10; // Set timeout to 10 seconds
     timeout.tv_usec = 0;
     if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
         perror("Failed to set socket timeout");
@@ -207,10 +163,13 @@ int connect_to_device(const char *mac_address, int channel) {
         return -1;
     }
 
+    // Connect to the server
+    printf(BRIGHT_BLUE "   Connecting to %s on channel %d...\n" ANSI_COLOR_RESET, mac_address, channel);
     status = connect(sock, (struct sockaddr *) &addr, sizeof(addr));
+
     if (status < 0) {
         if (errno == EAGAIN || errno == EINPROGRESS) {
-            fprintf(stderr, "Connection timed out.\n");
+            fprintf(stderr, ANSI_COLOR_RED "Connection timed out.\n" ANSI_COLOR_RESET);
         } else {
             perror("connect");
         }
