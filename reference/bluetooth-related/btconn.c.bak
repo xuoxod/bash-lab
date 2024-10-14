@@ -133,14 +133,15 @@ int choose_device(BluetoothDeviceInfo *devices, int num_devices) {
     return choice - 1; // Adjust the choice to be zero-based
 }
 
+
 // Function to connect to a Bluetooth device with detailed status messages
-int connect_to_device(const char *mac_address, int *channel) {
+int connect_to_device(const char *mac_address, int channel) {
     struct sockaddr_rc addr = {0};
     int sock, status;
     struct timeval timeout;
 
     // Allocate a socket
-    printf(BRIGHT_YELLOW "   Creating socket...\n" ANSI_COLOR_RESET);
+    printf(ANSI_COLOR_YELLOW "   Creating socket...\n" ANSI_COLOR_RESET);
     sock = socket(AF_BLUETOOTH, SOCK_STREAM, BTPROTO_RFCOMM);
     if (sock < 0) {
         perror("socket");
@@ -148,44 +149,36 @@ int connect_to_device(const char *mac_address, int *channel) {
     }
 
     // Set connection parameters
-    printf(BRIGHT_YELLOW "   Setting connection parameters...\n" ANSI_COLOR_RESET);
+    printf(ANSI_COLOR_YELLOW "   Setting connection parameters...\n" ANSI_COLOR_RESET);
     addr.rc_family = AF_BLUETOOTH;
     str2ba(mac_address, &addr.rc_bdaddr);
+    addr.rc_channel = (uint8_t)channel;
 
-    // Try connecting to channels 1-30
-    for (*channel = 1; *channel <= 30; (*channel)++) {
-        printf(BRIGHT_BLUE "   Connecting to %s on channel %d...\n" ANSI_COLOR_RESET, mac_address, *channel);
-        addr.rc_channel = (uint8_t)*channel;
-
-        // Set a timeout for the connection attempt
-        timeout.tv_sec = 10; // Set timeout to 10 seconds
-        timeout.tv_usec = 0;
-        if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
-            perror("Failed to set socket timeout");
-            close(sock);
-            return -1;
-        }
-
-        // Connect to the server
-        status = connect(sock, (struct sockaddr *) &addr, sizeof(addr));
-
-        if (status < 0) {
-            if (errno == EAGAIN || errno == EINPROGRESS) {
-                fprintf(stderr, ANSI_COLOR_RED "Connection timed out on channel %d.\n" ANSI_COLOR_RESET, *channel);
-            } else {
-                perror("connect");
-            }
-            // Continue trying other channels
-            continue;
-        }
-
-        printf(BRIGHT_GREEN "Connection successful on channel %d!\n" ANSI_COLOR_RESET, *channel);
-        return sock;
+    // Set a timeout for the connection attempt
+    timeout.tv_sec = 10; // Set timeout to 10 seconds
+    timeout.tv_usec = 0;
+    if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
+        perror("Failed to set socket timeout");
+        close(sock);
+        return -1;
     }
 
-    // If no connection was successful, close the socket and return -1
-    close(sock);
-    return -1;
+    // Connect to the server
+    printf(BRIGHT_BLUE "   Connecting to %s on channel %d...\n" ANSI_COLOR_RESET, mac_address, channel);
+    status = connect(sock, (struct sockaddr *) &addr, sizeof(addr));
+
+    if (status < 0) {
+        if (errno == EAGAIN || errno == EINPROGRESS) {
+            fprintf(stderr, ANSI_COLOR_RED "Connection timed out.\n" ANSI_COLOR_RESET);
+        } else {
+            perror("connect");
+        }
+        close(sock);
+        return -1;
+    }
+
+    printf(BRIGHT_GREEN "Connection successful!\n" ANSI_COLOR_RESET);
+    return sock;
 }
 
 // Function to handle communication with the connected device
@@ -278,9 +271,8 @@ int main(int argc, char *argv[]) {
     }
 
     // Connect to the device
-    sock = connect_to_device(mac_address, &channel);
+    sock = connect_to_device(mac_address, channel);
     if (sock < 0) {
-        fprintf(stderr, ANSI_COLOR_RED "Error: " ANSI_COLOR_RESET "Failed to connect to device on any channel.\n");
         return 1; // Connection failed
     }
 
