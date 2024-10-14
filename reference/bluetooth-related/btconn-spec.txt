@@ -1,0 +1,30 @@
+How to Use:
+
+    1. Compile: gcc -o btconn btconn.c -lbluetooth
+
+        gcc btconn.c -o btconn -lbluetooth
+
+
+    2. Run: ./btconn [mac_address|csv_filename] [channel] 
+
+        Example: ./btconn 00:11:22:33:44:55 1
+
+        With MAC address
+
+            ./btconn XX:XX:XX:XX:XX:XX 
+
+        Without MAC address
+
+            ./btconn
+
+        With MAC Address and Channel:
+
+            ./btconn XX:XX:XX:XX:XX:XX 3
+
+        With CSV File:
+
+            ./btconn devices.csv
+
+        With CSV File and Channel:
+
+            ./btconn devices.csv 3
