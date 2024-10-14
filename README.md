@@ -36,3 +36,9 @@ While this is primarily a personal learning space, I'm always open to feedback a
 Let's build something awesome together! 🚀
 
 # bash-lab
+
+## Programs
+
+This directory contains a collection of bash scripts I've written. Each script is designed to perform a specific task or set of tasks.
+
+**Please note:** This is a scratch directory, so the scripts here may be experimental, incomplete, or not well-documented. Use them at your own risk!
