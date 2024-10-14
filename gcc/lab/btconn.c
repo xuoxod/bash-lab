@@ -134,6 +134,7 @@ int choose_device(BluetoothDeviceInfo *devices, int num_devices) {
 }
 
 // Function to connect to a Bluetooth device with detailed status messages
+// Function to connect to a Bluetooth device with detailed status messages
 int connect_to_device(const char *mac_address, int *channel) {
     struct sockaddr_rc addr = {0};
     int sock, status;
@@ -162,7 +163,7 @@ int connect_to_device(const char *mac_address, int *channel) {
         timeout.tv_usec = 0;
         if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
             perror("Failed to set socket timeout");
-            close(sock);
+            close(sock); // Close the socket if timeout setting fails
             return -1;
         }
 
@@ -174,6 +175,13 @@ int connect_to_device(const char *mac_address, int *channel) {
                 fprintf(stderr, ANSI_COLOR_RED "Connection timed out on channel %d.\n" ANSI_COLOR_RESET, *channel);
             } else {
                 perror("connect");
+            }
+            // Close the socket and create a new one for the next attempt
+            close(sock);
+            sock = socket(AF_BLUETOOTH, SOCK_STREAM, BTPROTO_RFCOMM);
+            if (sock < 0) {
+                perror("socket");
+                return -1;
             }
             // Continue trying other channels
             continue;
