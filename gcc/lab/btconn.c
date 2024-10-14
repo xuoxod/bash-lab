@@ -29,7 +29,7 @@
 #define BRIGHT_GREEN      "\x1b[92m"
 #define BRIGHT_PINK       "\x1b[95m"
 #define BRIGHT_BLUE       "\x1b[94m"
-#define BRIGHT_CYAN        "\x1b[96m" 
+#define BRIGHT_CYAN        "\x1b[96m"
 
 // Structure to hold Bluetooth device information
 typedef struct {

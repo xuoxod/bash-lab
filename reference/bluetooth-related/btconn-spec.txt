@@ -4,6 +4,8 @@ How to Use:
 
         gcc btconn.c -o btconn -lbluetooth
 
+        gcc btconn.c -o btconn -L/usr/local/lib -lbluetooth
+
 
     2. Run: ./btconn [mac_address|csv_filename] [channel] 
 
