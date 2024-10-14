@@ -39,10 +39,14 @@ typedef struct {
 
 // Global flag for terminating threads gracefully
 volatile sig_atomic_t keep_running = 1;
+volatile sig_atomic_t connection_established = 0; // Flag for connection status
 
 // Function to handle Ctrl+C signal
 void signal_handler(int signum) {
     keep_running = 0;
+    if (connection_established) {
+        printf(BRIGHT_YELLOW "Stopping connection...\n" ANSI_COLOR_RESET);
+    }
 }
 
 // Function to get the current time in milliseconds
@@ -134,7 +138,6 @@ int choose_device(BluetoothDeviceInfo *devices, int num_devices) {
 }
 
 // Function to connect to a Bluetooth device with detailed status messages
-// Function to connect to a Bluetooth device with detailed status messages
 int connect_to_device(const char *mac_address, int *channel) {
     struct sockaddr_rc addr = {0};
     int sock, status;
@@ -188,6 +191,7 @@ int connect_to_device(const char *mac_address, int *channel) {
         }
 
         printf(BRIGHT_GREEN "Connection successful on channel %d!\n" ANSI_COLOR_RESET, *channel);
+        connection_established = 1; // Set connection flag
         return sock;
     }
 
