@@ -6,6 +6,10 @@ python3 netsage.py nmapscan -h
 
 -------------------------------------
 
+python netsage.py --help
+python netsage.py scan --help
+python netsage.py nmapscan --help
+
 -------------------------------------
 -------------------------------------
 -------------------------------------
