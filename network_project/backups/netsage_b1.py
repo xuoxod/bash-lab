@@ -15,8 +15,6 @@ from network_modules import (
 )  # Import other modules as needed
 from network_modules.helpers.parse_ports import parse_ports
 from network_modules.helpers.regexes import Regexes
-from network_modules.laneye import NetworkScanner
-
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -178,23 +176,6 @@ def output_results(results, config):
         exit(1)
 
 
-def laneye_scan_command(args, config):
-    """Handles the 'laneye' command."""
-    if not Regexes.ip_cidr_regex.match(args.target):
-        print(
-            f"{TextColors.FAIL}Error during scan: Invalid IP address or CIDR range: {args.target}{TextColors.ENDC}"
-        )
-        exit(1)
-
-    try:
-        scanner = NetworkScanner()  # Create an instance of the NetworkScanner
-        results = scanner.scan_network(args.target)
-        scanner.print_results(results)  # Print results to console
-    except ValueError as e:
-        print(f"{TextColors.FAIL}Error during scan: {e}{TextColors.ENDC}")
-        exit(1)
-
-
 def main(args=None):
     """The main entry point for the NetSage CLI."""
     config = {**DEFAULT_CONFIG, **load_config()}  # Load config, override defaults
@@ -259,15 +240,6 @@ def main(args=None):
         default=config.get("default_ports", DEFAULT_CONFIG["default_ports"]),
     )
 
-    # Laneye Scan Command
-    laneye_scan_parser = subparsers.add_parser(
-        "laneye", help="Scan a network using ARP requests."
-    )
-    laneye_scan_parser.add_argument(
-        "target",
-        help="The target IP address or CIDR range to scan. Example: 192.168.1.1 or 192.168.1.0/24",
-    )
-
     args = parser.parse_args()
 
     if args.command == "nmapscan":
@@ -276,8 +248,6 @@ def main(args=None):
         scan_command(args, config)
     elif args.command == "scapyscan":  # Handle the 'scapyscan' command
         scapy_scan_command(args, config)
-    elif args.command == "laneye":
-        laneye_scan_command(args, config)
     else:
         parser.print_help()
 
