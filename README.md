@@ -57,28 +57,35 @@ This directory contains a collection of bash scripts I've written. Each script i
 
 Please note: This is a scratch directory, so the scripts here may be experimental, incomplete, or not well-documented. Use them at your own risk!
 
-1. **Clone the repository:**
+1. **Installation & Usage:**
 
-   ```bash
-   (Recommended) Create a virtual environment:
-   python3 -m venv venv
-   source venv/bin/activate
+(Recommended) Create a virtual environment:
+python3 -m venv venv
 
-   Install dependencies:
-   pip install -r requirements.txt
-   ```
+_Activate the virtual environment_
+source venv/bin/activate
+
+_Deactivate the virtual environment (when done)_
+deactivate
+
+Install dependencies:
+pip install -r requirements.txt
+
+```bash
 
 - Usage
-  - Scan a target host using pure Python scanning:
-    python netsage.py scan -t 192.168.1.1
-  - Scan a target network using Nmap scanning:
-    python netsage.py scan -t 192.168.1.0/24 -m nmapscan
-  - Scan a target network using Scapy scanning:
-    python netsage.py scan -t 192.168.1.0/24 -m scapyscan
-  - Get help and see all options:
-    python netsage.py --help
-    python netsage.py scan --help
-    python netsage.py nmapscan --help
+- Scan a target host using pure Python scanning:
+  python netsage.py scan -t 192.168.1.1
+- Scan a target network using Nmap scanning:
+  python netsage.py scan -t 192.168.1.0/24 -m nmapscan
+- Scan a target network using Scapy scanning:
+  python netsage.py scan -t 192.168.1.0/24 -m scapyscan
+- Get help and see all options:
+  python netsage.py --help
+  python netsage.py scan --help
+  python netsage.py nmapscan --help
 
-git clone https://github.com/yourusername/netsage.git
+git clone https://github.com/xuoxod/bash-lab.git
 cd netsage
+
+```
