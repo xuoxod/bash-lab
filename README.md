@@ -62,10 +62,10 @@ Please note: This is a scratch directory, so the scripts here may be experimenta
 (Recommended) Create a virtual environment:
 python3 -m venv venv
 
-_Activate the virtual environment_
+_Activate the virtual environment:_
 source venv/bin/activate
 
-_Deactivate the virtual environment (when done)_
+_Deactivate the virtual environment (when done):_
 deactivate
 
 Install dependencies:
