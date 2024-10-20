@@ -12,10 +12,13 @@ from network_modules import (
     port_scanner,
     nmap_port_scanner,
     scapy_port_scanner,  # Import the scapy_port_scanner module
+    packetmaster,
+    laneye,
 )  # Import other modules as needed
 from network_modules.helpers.parse_ports import parse_ports
 from network_modules.helpers.regexes import Regexes
-from network_modules.laneye import NetworkScanner
+
+# from network_modules.laneye import NetworkScanner  # Already imported above
 
 
 logging.basicConfig(level=logging.DEBUG)
@@ -64,208 +67,156 @@ def load_config(config_file="./tests/unit/netsage.conf"):
         return {}
 
 
-def save_config(config, config_file="netsage.conf"):
-    """Saves configuration to a JSON file."""
-    try:
-        with open(config_file, "w") as f:
-            json.dump(config, f, indent=4)
-    except Exception as e:
-        logging.error(f"Error saving configuration to '{config_file}': {e}")
-
-
-def nmap_scan_command(args, config):
-    """Handles the 'nmapscan' command."""
+def packetmaster_command(args, config):
+    """Handles the 'packetmaster' command."""
     if not Regexes.ip_cidr_regex.match(args.target):
         print(
-            f"{TextColors.FAIL}Error during scan: Invalid IP address or CIDR range: {args.target}{TextColors.ENDC}"
+            f"{TextColors.FAIL}Error: Invalid IP address or CIDR range: {args.target}{TextColors.ENDC}"
         )
         exit(1)
 
-    ports_to_scan = parse_ports(args.ports)
+    targets = args.target.split(",")  # Allow multiple targets separated by commas
+    port = args.port
+    data = args.data
+    protocol = args.protocol
+    output_file = args.output_file
 
-    try:
-        scanner = nmap_port_scanner.NmapPortScanner(
-            arguments=config.get("nmap_arguments", DEFAULT_CONFIG["nmap_arguments"])
-        )
-        results = scanner.scan_network(args.target, ports_to_scan)
+    # Call scan_targets from the packetmaster module
+    results = packetmaster.scan_targets(targets, port, data, protocol, output_file)
 
-        # Service/Version Detection (Basic for now)
-        for ip, open_ports in results.items():
-            print(f"{TextColors.OKGREEN}[+] {ip}:{TextColors.ENDC}")
-            for port in open_ports:
-                try:
-                    nm = nmap.PortScanner()
-                    nm.scan(ip, str(port), arguments="-sV")  # Version scan
-                    service_info = nm[ip]["tcp"][port]["name"]
-                    version_info = nm[ip]["tcp"][port]["version"]
-                    print(f"\tPort {port}: Open - {service_info} ({version_info})")
-                except Exception as e:
-                    print(f"\tPort {port}: Open - Service/Version info: N/A")
-        # Output based on format
-        output_results(results, config)
-
-    except nmap.nmap.PortScannerError as e:
-        print(f"{TextColors.FAIL}Nmap Error: {e}{TextColors.ENDC}")
-        exit(1)
-    except ValueError as e:
-        print(f"{TextColors.FAIL}Error during scan: {e}{TextColors.ENDC}")
-        exit(1)
+    if not output_file:  # Print to console if no output file is specified
+        for result in results:
+            print(json.dumps(result, indent=4))
 
 
-def scan_command(args, config):
-    """Handles the 'scan' command for port scanning."""
-    if not Regexes.ip_cidr_regex.match(args.target):
-        print(
-            f"{TextColors.FAIL}Error during scan: Invalid IP address or CIDR range: {args.target}{TextColors.ENDC}"
-        )
-        exit(1)
-    ports_to_scan = parse_ports(args.ports)
-
-    try:
-        scanner = port_scanner.PortScanner(
-            timeout=float(config.get("timeout", DEFAULT_CONFIG["timeout"]))
-        )
-        results = scanner.scan_network(args.target, ports_to_scan)
-        output_results(results, config)
-    except ValueError as e:
-        print(f"{TextColors.FAIL}Error during scan: {e}{TextColors.ENDC}")
-        exit(1)
-
-
-def scapy_scan_command(args, config):  # New function for scapy scan
-    """Handles the 'scapyscan' command for port scanning using Scapy."""
-    if not Regexes.ip_cidr_regex.match(args.target):
-        print(
-            f"{TextColors.FAIL}Error during scan: Invalid IP address or CIDR range: {args.target}{TextColors.ENDC}"
-        )
-        exit(1)
-    ports_to_scan = parse_ports(args.ports)
-
-    try:
-        scanner = scapy_port_scanner.ScapyPortScanner(
-            timeout=float(config.get("timeout", DEFAULT_CONFIG["timeout"]))
-        )
-        results = scanner.scan_network(args.target, ports_to_scan)
-        output_results(results, config)
-    except ValueError as e:
-        print(f"{TextColors.FAIL}Error during scan: {e}{TextColors.ENDC}")
-        exit(1)
-
-
-def output_results(results, config):
-    """Outputs the scan results based on the configured format."""
-    output_format = config.get("output_format", DEFAULT_CONFIG["output_format"])
-
-    if output_format == "text":
-        for ip, open_ports in results.items():
-            print(f"{TextColors.OKGREEN}[+] {ip}:{TextColors.ENDC}")
-            if open_ports:
-                for port in open_ports:
-                    print(f"\tPort {port}: Open")
-            else:
-                print("\tNo open ports found")
-    elif output_format == "csv":
-        print("IP,Open Ports")
-        writer = csv.writer(sys.stdout)
-        for ip, open_ports in results.items():
-            writer.writerow([ip, ",".join(str(port) for port in open_ports)])
-    elif output_format == "json":
-        print(json.dumps(results, indent=4))
-    else:
-        print(
-            f"{TextColors.FAIL}Invalid output format: {output_format}{TextColors.ENDC}"
-        )
-        exit(1)
-
-
-def laneye_scan_command(args, config):
+def laneeye_scan_command(args, config):
     """Handles the 'laneye' command."""
-    if not Regexes.ip_cidr_regex.match(args.target):
-        print(
-            f"{TextColors.FAIL}Error during scan: Invalid IP address or CIDR range: {args.target}{TextColors.ENDC}"
-        )
-        exit(1)
-
+    scanner = laneeye.NetworkScanner()
     try:
-        scanner = NetworkScanner()  # Create an instance of the NetworkScanner
         results = scanner.scan_network(args.target)
-        scanner.print_results(results)  # Print results to console
     except ValueError as e:
-        print(f"{TextColors.FAIL}Error during scan: {e}{TextColors.ENDC}")
-        exit(1)
+        print(f"{TextColors.FAIL}Error: {e}{TextColors.ENDC}")
+        sys.exit(1)
+
+    if args.output:
+        if args.output == "csv":
+            scanner.save_to_csv(results, "network_scan.csv")
+            print(
+                f"{TextColors.OKGREEN}[+] Results saved to network_scan.csv{TextColors.ENDC}"
+            )
+        elif args.output == "json":
+            scanner.save_to_json(results, "network_scan.json")
+            print(
+                f"{TextColors.OKGREEN}[+] Results saved to network_scan.json{TextColors.ENDC}"
+            )
+        elif args.output == "html":
+            scanner.save_to_html(results, "network_scan.html")
+            print(
+                f"{TextColors.OKGREEN}[+] Results saved to network_scan.html{TextColors.ENDC}"
+            )
+    else:
+        scanner.print_results(results)
 
 
 def main(args=None):
     """The main entry point for the NetSage CLI."""
-    config = {**DEFAULT_CONFIG, **load_config()}  # Load config, override defaults
+    config = load_config()
 
-    parser = argparse.ArgumentParser(description="NetSage: Your Network Oracle")
-    subparsers = parser.add_subparsers(
-        dest="command",
-        help="Available commands. Use 'netsage.py <command> -h' for more info.",
+    parser = argparse.ArgumentParser(
+        description="NetSage: A versatile network scanning and analysis tool"
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Nmap Scan Command
+    nmap_parser = subparsers.add_parser(
+        "nmapscan", help="Perform an nmap scan with custom arguments"
+    )
+    nmap_parser.add_argument("target", help="Target IP address or CIDR range")
+    nmap_parser.add_argument(
+        "-p",
+        "--ports",
+        type=str,
+        help="Comma-separated list of ports or port ranges (e.g., 22,80-85,443)",
+    )
+    nmap_parser.add_argument(
+        "-o",
+        "--output",
+        choices=["csv", "json", "html", "text"],
+        help="Save output to file (csv, json, html, text)",
     )
 
     # Scan Command
     scan_parser = subparsers.add_parser(
-        "scan",
-        help="Scan a network for open ports using a pure Python implementation.",
+        "scan", help="Perform a basic port scan using Python sockets"
     )
-    scan_parser.add_argument(
-        "target",
-        help="The target IP address or CIDR range to scan. Example: 192.168.1.1 or 192.168.1.0/24",
-    )
+    scan_parser.add_argument("target", help="Target IP address or CIDR range")
     scan_parser.add_argument(
         "-p",
         "--ports",
         type=str,
-        nargs="+",
-        help="Ports to scan (space or comma separated). Example: '80 443' or '80,443,8080'. Default: common ports (22, 25, 53, 80, 110, 143, 443, 465, 993, 995, 3389, 587)",
-        default=config.get("default_ports", DEFAULT_CONFIG["default_ports"]),
+        help="Comma-separated list of ports or port ranges (e.g., 22,80-85,443)",
     )
-
-    # Nmap Scan Command
-    nmap_scan_parser = subparsers.add_parser(
-        "nmapscan",
-        help="Scan a network for open ports using the Nmap port scanner.",
-    )
-    nmap_scan_parser.add_argument(
-        "target",
-        help="The target IP address or CIDR range to scan. Example: 192.168.1.1 or 192.168.1.0/24",
-    )
-    nmap_scan_parser.add_argument(
-        "-p",
-        "--ports",
-        type=str,
-        nargs="+",
-        help="Ports to scan (space or comma separated). Example: '80 443' or '80,443,8080'. Default: Nmap's default port selection.",
-        default=[],
+    scan_parser.add_argument(
+        "-o",
+        "--output",
+        choices=["csv", "json", "html", "text"],
+        help="Save output to file (csv, json, html, text)",
     )
 
     # Scapy Scan Command
-    scapy_scan_parser = subparsers.add_parser(  # Add the scapy scan parser
-        "scapyscan",
-        help="Scan a network for open ports using the Scapy library.",
+    scapy_parser = subparsers.add_parser(
+        "scapyscan", help="Perform a port scan using Scapy"
     )
-    scapy_scan_parser.add_argument(
-        "target",
-        help="The target IP address or CIDR range to scan. Example: 192.168.1.1 or 192.168.1.0/24",
-    )
-    scapy_scan_parser.add_argument(
+    scapy_parser.add_argument("target", help="Target IP address or CIDR range")
+    scapy_parser.add_argument(
         "-p",
         "--ports",
         type=str,
-        nargs="+",
-        help="Ports to scan (space or comma separated). Example: '80 443' or '80,443,8080'. Default: common ports (22, 25, 53, 80, 110, 143, 443, 465, 993, 995, 3389, 587)",
-        default=config.get("default_ports", DEFAULT_CONFIG["default_ports"]),
+        help="Comma-separated list of ports or port ranges (e.g., 22,80-85,443)",
+    )
+    scapy_parser.add_argument(
+        "-o",
+        "--output",
+        choices=["csv", "json", "html", "text"],
+        help="Save output to file (csv, json, html, text)",
     )
 
     # Laneye Scan Command
-    laneye_scan_parser = subparsers.add_parser(
-        "laneye", help="Scan a network using ARP requests."
+    laneye_parser = subparsers.add_parser(
+        "laneye", help="Perform a network scan using ARP requests"
     )
-    laneye_scan_parser.add_argument(
-        "target",
-        help="The target IP address or CIDR range to scan. Example: 192.168.1.1 or 192.168.1.0/24",
+    laneye_parser.add_argument("target", help="Target IP address or CIDR range")
+    laneye_parser.add_argument(
+        "-o",
+        "--output",
+        choices=["csv", "json", "html"],
+        help="Save output to file (csv, json, html)",
+    )
+
+    # PacketMaster Command
+    packetmaster_parser = subparsers.add_parser(
+        "packetmaster", help="Send and receive custom network packets"
+    )
+    packetmaster_parser.add_argument(
+        "target", help="Target IP address (or multiple targets separated by commas)"
+    )
+    packetmaster_parser.add_argument(
+        "-p", "--port", type=int, help="Destination port (optional)"
+    )
+    packetmaster_parser.add_argument(
+        "-d", "--data", help="Payload data to include in the packet (optional)"
+    )
+    packetmaster_parser.add_argument(
+        "-prot",
+        "--protocol",
+        choices=["tcp", "udp", "icmp"],
+        default="icmp",
+        help="Protocol to use (tcp, udp, icmp). Default: icmp",
+    )
+    packetmaster_parser.add_argument(
+        "-o",
+        "--output-file",
+        help="Optional output filename for saving results to a CSV file",
     )
 
     args = parser.parse_args()
@@ -278,8 +229,95 @@ def main(args=None):
         scapy_scan_command(args, config)
     elif args.command == "laneye":
         laneye_scan_command(args, config)
+    elif args.command == "packetmaster":  # Correctly handle 'packetmaster'
+        packetmaster_command(args, config)
     else:
         parser.print_help()
+
+
+def nmap_scan_command(args, config):
+    """Handles the 'nmapscan' command."""
+    scanner = nmap_port_scanner.NmapPortScanner(arguments=config["nmap_arguments"])
+    ports = parse_ports(args.ports) if args.ports else None
+    results = scanner.scan_network(args.target, ports)
+
+    if args.output:
+        save_results(results, args.output, "nmap_scan_results")
+    else:
+        scanner.print_results(results)
+
+
+def scan_command(args, config):
+    """Handles the 'scan' command."""
+    scanner = port_scanner.PortScanner(
+        timeout=config["timeout"], max_threads=config.get("max_threads", 100)
+    )
+    ports = parse_ports(args.ports) if args.ports else config["default_ports"]
+    try:
+        results = scanner.scan_network(args.target, ports)
+    except ValueError as e:
+        print(f"{TextColors.FAIL}Error: {e}{TextColors.ENDC}")
+        sys.exit(1)
+
+    if args.output:
+        save_results(results, args.output, "port_scan_results")
+    else:
+        scanner.print_results(results)
+
+
+def scapy_scan_command(args, config):
+    """Handles the 'scapyscan' command."""
+    scanner = scapy_port_scanner.ScapyPortScanner(timeout=config["timeout"])
+    ports = parse_ports(args.ports) if args.ports else config["default_ports"]
+    try:
+        # Assuming your scan_network function in scapy_port_scanner takes a list of IPs
+        target_ips = [str(ip) for ip in ipaddress.ip_network(args.target).hosts()]
+        results = scanner.scan_network(target_ips, ports)
+    except ValueError as e:
+        print(f"{TextColors.FAIL}Error: {e}{TextColors.ENDC}")
+        sys.exit(1)
+
+    if args.output:
+        save_results(results, args.output, "scapy_scan_results")
+    else:
+        scanner.print_results(results)
+
+
+def save_results(results, output_format, filename_prefix):
+    """Saves the scan results to a file in the specified format."""
+    if output_format == "json":
+        filename = f"{filename_prefix}.json"
+        with open(filename, "w") as f:
+            json.dump(results, f, indent=4)
+        print(f"{TextColors.OKGREEN}[+] Results saved to {filename}{TextColors.ENDC}")
+    elif output_format == "csv":
+        filename = f"{filename_prefix}.csv"
+        with open(filename, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["IP Address", "Open Ports"])
+            for ip, ports in results.items():
+                writer.writerow([ip, ",".join(str(p) for p in ports)])
+        print(f"{TextColors.OKGREEN}[+] Results saved to {filename}{TextColors.ENDC}")
+    elif output_format == "html":
+        filename = f"{filename_prefix}.html"
+        with open(filename, "w") as f:
+            f.write("<html><body><table>\n")
+            f.write("<tr><th>IP Address</th><th>Open Ports</th></tr>\n")
+            for ip, ports in results.items():
+                f.write(
+                    f"<tr><td>{ip}</td><td>{','.join(str(p) for p in ports)}</td></tr>\n"
+                )
+            f.write("</table></body></html>\n")
+        print(f"{TextColors.OKGREEN}[+] Results saved to {filename}{TextColors.ENDC}")
+    elif output_format == "text":
+        for ip, ports in results.items():
+            print(f"{TextColors.OKGREEN}IP Address: {ip}{TextColors.ENDC}")
+            if ports:
+                print(
+                    f"{TextColors.OKBLUE}Open Ports: {', '.join(str(p) for p in ports)}{TextColors.ENDC}"
+                )
+            else:
+                print(f"{TextColors.FAIL}No open ports found{TextColors.ENDC}")
 
 
 if __name__ == "__main__":
