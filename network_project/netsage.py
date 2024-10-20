@@ -19,7 +19,6 @@ from network_modules import (
 from network_modules.helpers.parse_ports import parse_ports
 from network_modules.traffic_interceptor import TrafficInterceptor
 
-
 # Set up logging
 logging.basicConfig(level=logging.INFO)  # Set default logging level to INFO
 
@@ -31,6 +30,24 @@ DEFAULT_CONFIG = {
     "output_format": "text",
     "verbosity": "info",
 }
+
+
+def is_valid_port(port):
+    """Checks if a port number is within the valid range (1-65535)."""
+    try:
+        port = int(port)
+        return 1 <= port <= 65535
+    except ValueError:
+        return False
+
+
+def is_valid_ip(ip_address):
+    """Checks if an IP address or CIDR range is valid."""
+    try:
+        ipaddress.ip_network(ip_address)
+        return True
+    except ValueError:
+        return False
 
 
 def load_config(config_file="./tests/unit/netsage.conf"):
@@ -207,16 +224,27 @@ def main():
 
     args = parser.parse_args()
 
+    # Parse ports only once after parsing arguments
+    try:
+        ports = (
+            parse_ports(args.ports)
+            if args.ports
+            else parse_ports(config["default_ports"])
+        )
+    except ValueError as e:
+        print(f"{TextColors.FAIL}Error: {e}{TextColors.ENDC}")
+        sys.exit(1)
+
     if args.command == "nmapscan":
-        nmap_scan_command(args, config)
+        nmap_scan_command(args, config, ports)  # Pass ports to the function
     elif args.command == "scan":
-        scan_command(args, config)
+        scan_command(args, config, ports)  # Pass ports to the function
     elif args.command == "scapyscan":
-        scapy_scan_command(args, config)
+        scapy_scan_command(args, config, ports)  # Pass ports to the function
     elif args.command == "laneye":
-        laneye_scan_command(args, config)
+        laneye_scan_command(args, config)  # No need to pass ports here
     elif args.command == "packetmaster":
-        packetmaster_command(args, config)
+        packetmaster_command(args, config)  # No need to pass ports here
     elif args.command == "traffic-interceptor":
         try:
             interceptor = TrafficInterceptor(args.target)
@@ -236,11 +264,14 @@ def main():
         parser.print_help()
 
 
-def nmap_scan_command(args, config):
+def nmap_scan_command(args, config, ports):
     """Handles the 'nmapscan' command."""
     scanner = nmap_port_scanner.NmapPortScanner(arguments=config["nmap_arguments"])
-    ports = parse_ports(args.ports) if args.ports else None
-    results = scanner.scan_network(args.target, ports)
+    try:
+        results = scanner.scan_network(args.target, ports)
+    except Exception as e:
+        print(f"{TextColors.FAIL}Error during Nmap scan: {e}{TextColors.ENDC}")
+        sys.exit(1)
 
     if args.output:
         save_results(results, args.output, "nmap_scan_results")
@@ -248,18 +279,21 @@ def nmap_scan_command(args, config):
         scanner.print_results(results)
 
 
-def scan_command(args, config):
+def scan_command(args, config, ports):
     """Handles the 'scan' command."""
+    if not is_valid_ip(args.target):
+        print(
+            f"{TextColors.FAIL}Error: Invalid target IP address or CIDR range.{TextColors.ENDC}"
+        )
+        sys.exit(1)
+
     scanner = port_scanner.PortScanner(
         timeout=config["timeout"], max_threads=config.get("max_threads", 100)
     )
-    ports = (
-        parse_ports(args.ports) if args.ports else parse_ports(config["default_ports"])
-    )
     try:
         results = scanner.scan_network(args.target, ports)
-    except ValueError as e:
-        print(f"{TextColors.FAIL}Error: {e}{TextColors.ENDC}")
+    except Exception as e:
+        print(f"{TextColors.FAIL}Error during port scan: {e}{TextColors.ENDC}")
         sys.exit(1)
 
     if args.output:
@@ -268,17 +302,14 @@ def scan_command(args, config):
         scanner.print_results(results)
 
 
-def scapy_scan_command(args, config):
+def scapy_scan_command(args, config, ports):
     """Handles the 'scapyscan' command."""
     scanner = scapy_port_scanner.ScapyPortScanner(timeout=config["timeout"])
-    ports = (
-        parse_ports(args.ports) if args.ports else parse_ports(config["default_ports"])
-    )
     try:
         target_ips = [str(ip) for ip in ipaddress.ip_network(args.target).hosts()]
         results = scanner.scan_network(target_ips, ports)
-    except ValueError as e:
-        print(f"{TextColors.FAIL}Error: {e}{TextColors.ENDC}")
+    except Exception as e:
+        print(f"{TextColors.FAIL}Error during Scapy scan: {e}{TextColors.ENDC}")
         sys.exit(1)
 
     if args.output:
@@ -314,14 +345,14 @@ def save_results(results, output_format, filename_prefix):
             f.write("</table></body></html>\n")
         print(f"{TextColors.OKGREEN}[+] Results saved to {filename}{TextColors.ENDC}")
     elif output_format == "text":
+        # Use tabulate for table formatting in text output
+        table_data = []
         for ip, ports in results.items():
-            print(f"{TextColors.OKGREEN}IP Address: {ip}{TextColors.ENDC}")
-            if ports:
-                print(
-                    f"{TextColors.OKBLUE}Open Ports: {', '.join(str(p) for p in ports)}{TextColors.ENDC}"
-                )
-            else:
-                print(f"{TextColors.FAIL}No open ports found{TextColors.ENDC}")
+            open_ports = ", ".join(str(p) for p in ports) if ports else "None"
+            table_data.append([ip, open_ports])
+
+        headers = ["IP Address", "Open Ports"]
+        print(tabulate(table_data, headers=headers, tablefmt="grid"))
 
 
 if __name__ == "__main__":
