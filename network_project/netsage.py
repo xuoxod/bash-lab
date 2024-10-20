@@ -3,7 +3,7 @@
 import sys
 import argparse
 import logging
-import nmap
+import ipaddress
 import json
 import csv
 
@@ -11,38 +11,22 @@ from network_modules.helpers.colors import TextColors
 from network_modules import (
     port_scanner,
     nmap_port_scanner,
-    scapy_port_scanner,  # Import the scapy_port_scanner module
+    scapy_port_scanner,
     packetmaster,
     laneye,
-)  # Import other modules as needed
+)
 from network_modules.helpers.parse_ports import parse_ports
-from network_modules.helpers.regexes import Regexes
 
-# from network_modules.laneye import NetworkScanner  # Already imported above
+# Set up logging
+logging.basicConfig(level=logging.INFO)  # Set default logging level to INFO
 
-
-logging.basicConfig(level=logging.DEBUG)
-
-# Default configuration (can be overridden by config file or command-line args)
+# Default configuration
 DEFAULT_CONFIG = {
-    "default_ports": [
-        "22",
-        "25",
-        "53",
-        "80",
-        "110",
-        "143",
-        "443",
-        "465",
-        "993",
-        "995",
-        "3389",
-        "587",
-    ],
-    "timeout": 2.0,  # Default timeout in seconds
+    "default_ports": "22,25,53,80,110,143,443,465,993,995,3389,587",
+    "timeout": 2.0,
     "nmap_arguments": "-T4 -F",
-    "output_format": "text",  # Default output format
-    "verbosity": "info",  # Default verbosity level
+    "output_format": "text",
+    "verbosity": "info",
 }
 
 
@@ -53,8 +37,7 @@ def load_config(config_file="./tests/unit/netsage.conf"):
             config = json.load(f)
         return config
     except FileNotFoundError:
-        # If in testing mode, return an empty config
-        if "unittest" in sys.modules:  # Check if running tests
+        if "unittest" in sys.modules:
             return {}
         logging.warning(
             f"Configuration file '{config_file}' not found. Using default settings."
@@ -69,29 +52,22 @@ def load_config(config_file="./tests/unit/netsage.conf"):
 
 def packetmaster_command(args, config):
     """Handles the 'packetmaster' command."""
-    if not Regexes.ip_cidr_regex.match(args.target):
-        print(
-            f"{TextColors.FAIL}Error: Invalid IP address or CIDR range: {args.target}{TextColors.ENDC}"
-        )
-        exit(1)
-
-    targets = args.target.split(",")  # Allow multiple targets separated by commas
+    targets = args.target.split(",")
     port = args.port
     data = args.data
     protocol = args.protocol
     output_file = args.output_file
 
-    # Call scan_targets from the packetmaster module
     results = packetmaster.scan_targets(targets, port, data, protocol, output_file)
 
-    if not output_file:  # Print to console if no output file is specified
+    if not output_file:
         for result in results:
             print(json.dumps(result, indent=4))
 
 
-def laneeye_scan_command(args, config):
+def laneye_scan_command(args, config):
     """Handles the 'laneye' command."""
-    scanner = laneeye.NetworkScanner()
+    scanner = laneye.NetworkScanner()
     try:
         results = scanner.scan_network(args.target)
     except ValueError as e:
@@ -118,9 +94,10 @@ def laneeye_scan_command(args, config):
         scanner.print_results(results)
 
 
-def main(args=None):
-    """The main entry point for the NetSage CLI."""
+def main():
+    """Main entry point for NetSage CLI."""
     config = load_config()
+    config = {**DEFAULT_CONFIG, **config}  # Merge default and loaded config
 
     parser = argparse.ArgumentParser(
         description="NetSage: A versatile network scanning and analysis tool"
@@ -225,11 +202,11 @@ def main(args=None):
         nmap_scan_command(args, config)
     elif args.command == "scan":
         scan_command(args, config)
-    elif args.command == "scapyscan":  # Handle the 'scapyscan' command
+    elif args.command == "scapyscan":
         scapy_scan_command(args, config)
     elif args.command == "laneye":
         laneye_scan_command(args, config)
-    elif args.command == "packetmaster":  # Correctly handle 'packetmaster'
+    elif args.command == "packetmaster":
         packetmaster_command(args, config)
     else:
         parser.print_help()
@@ -252,7 +229,9 @@ def scan_command(args, config):
     scanner = port_scanner.PortScanner(
         timeout=config["timeout"], max_threads=config.get("max_threads", 100)
     )
-    ports = parse_ports(args.ports) if args.ports else config["default_ports"]
+    ports = (
+        parse_ports(args.ports) if args.ports else parse_ports(config["default_ports"])
+    )
     try:
         results = scanner.scan_network(args.target, ports)
     except ValueError as e:
@@ -268,9 +247,10 @@ def scan_command(args, config):
 def scapy_scan_command(args, config):
     """Handles the 'scapyscan' command."""
     scanner = scapy_port_scanner.ScapyPortScanner(timeout=config["timeout"])
-    ports = parse_ports(args.ports) if args.ports else config["default_ports"]
+    ports = (
+        parse_ports(args.ports) if args.ports else parse_ports(config["default_ports"])
+    )
     try:
-        # Assuming your scan_network function in scapy_port_scanner takes a list of IPs
         target_ips = [str(ip) for ip in ipaddress.ip_network(args.target).hosts()]
         results = scanner.scan_network(target_ips, ports)
     except ValueError as e:
