@@ -25,3 +25,28 @@ class TestLaneyeScan(unittest.TestCase):
         self.assertEqual(results["192.168.1.2"], "00:11:22:33:44:55")
 
     # Add more test cases for invalid targets, output formats, etc.
+    @patch("scapy.all.srp")
+    def test_invalid_targets(self, mock_srp):
+        # Test with incorrect IP addresses
+        with self.assertRaises(ValueError) as context:
+            scanner = NetworkScanner()
+            scanner.scan_network("192.168.1")
+        self.assertIn(
+            "'192.168.1' does not appear to be an IPv4 or IPv6 network",  # Actual error message
+            str(context.exception),
+        )
+
+        # Test with invalid CIDR ranges
+        with self.assertRaises(ValueError) as context:
+            scanner = NetworkScanner()
+            scanner.scan_network("192.168.1.0/33")  # Invalid CIDR range
+        self.assertIn(
+            "'192.168.1' does not appear to be an IPv4 or IPv6 network",  # Actual error message
+            str(context.exception),
+        )
+
+        # Test with other invalid input
+        with self.assertRaises(ValueError) as context:
+            scanner = NetworkScanner()
+            scanner.scan_network("invalid-input")
+        self.assertIn("Invalid IP address or CIDR range", str(context.exception))

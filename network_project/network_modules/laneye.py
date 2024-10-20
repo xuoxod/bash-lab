@@ -31,6 +31,13 @@ class NetworkScanner:
 
     def scan_network(self, net_address):
         """Sends ARP requests and returns a dictionary of IP-MAC mappings."""
+        try:
+            ipaddress.ip_network(net_address, strict=False)  # Validate the input
+        except ipaddress.AddressValueError:  # Catch the specific error
+            raise ValueError(
+                f"Invalid IP address or CIDR range: {net_address}"
+            ) from None  # Only raise the exception
+
         results = {}  # Use a dictionary to store results
         arp_request = scapy.ARP(pdst=net_address)
         broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
@@ -53,7 +60,7 @@ class NetworkScanner:
 
         ip_colors = {}  # Store colors for each IP
 
-        for ip, mac in results:
+        for ip, mac in results.items():
             if ip not in ip_colors:
                 ip_colors[ip] = get_random_ansi_color()
             color = ip_colors[ip]
@@ -65,14 +72,14 @@ class NetworkScanner:
         with open(filename, "w", newline="") as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(["IP Address", "MAC Address"])
-            for ip, mac in results:
+            for ip, mac in results.items():
                 writer.writerow([ip, mac])
 
     def save_to_json(self, results, filename="network_scan.json"):
         """Saves the results to a JSON file."""
 
         data = []
-        for ip, mac in results:
+        for ip, mac in results.items():
             data.append({"IP Address": ip, "MAC Address": mac})
 
         with open(filename, "w") as jsonfile:
@@ -104,7 +111,7 @@ class NetworkScanner:
 
         ip_colors = {}  # Store colors for each IP
 
-        for ip, mac in results:
+        for ip, mac in results.items():
             if ip not in ip_colors:
                 ip_colors[ip] = get_random_ansi_color()
             color = ip_colors[ip]

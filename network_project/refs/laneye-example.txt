@@ -1,0 +1,191 @@
+#!/usr/bin/python3
+
+"""
+laneye.py - Network scanning and device discovery module.
+
+This module provides functionality for scanning a network to identify active
+devices and gather information about them. It utilizes the 'scapy' library
+for network packet manipulation and analysis.
+"""
+
+import logging
+import platform
+from queue import Queue
+from datetime import datetime
+
+from scapy.all import (
+    ARP,
+    Ether,
+    IP,
+    srp,
+    UDP,
+    ICMP,
+    sr1,
+    conf,
+)
+from scapy.layers.inet import TCP
+
+logging.basicConfig(level=logging.INFO)
+
+
+class NetworkScanner:
+    """
+    A class to represent a network scanner.
+
+    Attributes:
+        None
+    """
+
+    def __init__(self):
+        """
+        Initializes the NetworkScanner object.
+        """
+        self.q = Queue()
+
+    def scan_network(self, ip_range):
+        """
+        Scans the specified IP range for active devices.
+
+        Args:
+            ip_range (str): The IP range to scan in CIDR notation (e.g., "192.168.1.0/24").
+
+        Returns:
+            dict: A dictionary containing information about the discovered devices.
+                  The keys are IP addresses, and the values are dictionaries with device details.
+        """
+
+        # Create ARP packet for broadcasting
+        arp = ARP(pdst=ip_range)
+        # Create Ether packet for layer 2 broadcast
+        ether = Ether(dst="ff:ff:ff:ff:ff:ff")
+        # Stack the packets
+        packet = ether / arp
+        # Send and receive packets
+        ans, unans = srp(packet, timeout=2, verbose=False)
+        # Store discovered devices
+        devices = {}
+        for sent, received in ans:
+            devices[received.psrc] = {"mac": received.hwsrc}
+        return devices
+
+    def get_os(self, ip_addr):
+        """
+        Attempts to determine the operating system of a device using TCP fingerprinting.
+
+        Args:
+            ip_addr (str): The IP address of the device.
+
+        Returns:
+            str: The detected operating system (or "Unknown" if detection fails).
+        """
+
+        # Send a SYN packet and analyze the response
+        p = IP(dst=ip_addr) / TCP(dport=80, flags="S")
+        resp = sr1(p, timeout=2, verbose=False)
+        if resp is not None:
+            if resp.haslayer(TCP):
+                if resp[TCP].flags == 0x12:
+                    # Analyze the TTL value to guess the OS
+                    ttl = resp.ttl
+                    if ttl <= 64:
+                        return "Linux/Unix"
+                    elif ttl <= 128:
+                        return "Windows"
+                    else:
+                        return "Unknown"
+        return "Unknown"
+
+    def get_hostname(self, ip_addr):
+        """
+        Retrieves the hostname associated with an IP address using reverse DNS lookup.
+
+        Args:
+            ip_addr (str): The IP address.
+
+        Returns:
+            str: The hostname (or the IP address if the hostname cannot be resolved).
+        """
+
+        try:
+            # Attempt reverse DNS lookup
+            hostname = conf.netcache.get(ip_addr, None)
+            if hostname:
+                return hostname
+            else:
+                hostname = platform.node()
+                return hostname
+        except Exception:
+            return ip_addr
+
+    def ping_device(self, ip_addr):
+        """
+        Pings a device and measures the response time.
+
+        Args:
+            ip_addr (str): The IP address of the device.
+
+        Returns:
+            float: The ping response time in milliseconds (or -1 if the ping fails).
+        """
+
+        try:
+            # Send and receive ICMP echo request/reply packets
+            start_time = datetime.now()
+            response = sr1(IP(dst=ip_addr) / ICMP(), timeout=2, verbose=False)
+            end_time = datetime.now()
+            if response:
+                # Calculate round-trip time
+                ping_time = (end_time - start_time).total_seconds() * 1000
+                return ping_time
+            else:
+                return -1
+        except Exception:
+            return -1
+
+    def scan_device(self, ip_addr):
+        """
+        Gathers detailed information about a single device.
+
+        Args:
+            ip_addr (str): The IP address of the device.
+
+        Returns:
+            dict: A dictionary containing device details.
+        """
+
+        device_info = {}
+        device_info["ip"] = ip_addr
+        device_info["hostname"] = self.get_hostname(ip_addr)
+        device_info["mac"] = "Unknown"
+        device_info["os"] = self.get_os(ip_addr)
+        device_info["ping"] = self.ping_device(ip_addr)
+        return device_info
+
+    def print_results(self, scan_results):
+        """
+        Prints the scan results in a user-friendly format.
+
+        Args:
+            scan_results (dict): The scan results as a dictionary.
+        """
+
+        print("-" * 40)
+        print("Network Scan Results")
+        print("-" * 40)
+        for ip, device_info in scan_results.items():
+            print(f"IP Address: {device_info['ip']}")
+            print(f"Hostname: {device_info['hostname']}")
+            print(f"MAC Address: {device_info['mac']}")
+            print(f"Operating System: {device_info['os']}")
+            if device_info["ping"] != -1:
+                print(f"Ping: {device_info['ping']:.2f} ms")
+            else:
+                print("Ping: Unreachable")
+            print("-" * 40)
+
+
+if __name__ == "__main__":
+    # Example usage:
+    scanner = NetworkScanner()
+    results = scanner.scan_network("192.168.1.0/24")
+    scanner.print_results(results)
