@@ -6,6 +6,7 @@ import logging
 import ipaddress
 import json
 import csv
+import time
 
 from network_modules.helpers.colors import TextColors
 from network_modules import (
@@ -16,6 +17,8 @@ from network_modules import (
     laneye,
 )
 from network_modules.helpers.parse_ports import parse_ports
+from network_modules.traffic_interceptor import TrafficInterceptor
+
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)  # Set default logging level to INFO
@@ -103,6 +106,12 @@ def main():
         description="NetSage: A versatile network scanning and analysis tool"
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # TrafficInterceptor Command
+    traffic_interceptor_parser = subparsers.add_parser(
+        "traffic-interceptor", help="Reroute traffic from a target on the LAN"
+    )
+    traffic_interceptor_parser.add_argument("target", help="Target IP address")
 
     # Nmap Scan Command
     nmap_parser = subparsers.add_parser(
@@ -208,6 +217,21 @@ def main():
         laneye_scan_command(args, config)
     elif args.command == "packetmaster":
         packetmaster_command(args, config)
+    elif args.command == "traffic-interceptor":
+        try:
+            interceptor = TrafficInterceptor(args.target)
+            interceptor.start()
+            # Keep the script running until manually stopped (e.g., Ctrl+C)
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                print("\nStopping traffic interception...")
+            finally:
+                interceptor.stop()  # Ensure restoration even if an error occurs
+        except ValueError as e:
+            print(f"{TextColors.FAIL}Error: {e}{TextColors.ENDC}")
+            sys.exit(1)
     else:
         parser.print_help()
 
