@@ -41,7 +41,7 @@ class TestLaneyeScan(unittest.TestCase):
             scanner = NetworkScanner()
             scanner.scan_network("192.168.1.0/33")  # Invalid CIDR range
         self.assertIn(
-            "'192.168.1' does not appear to be an IPv4 or IPv6 network",  # Actual error message
+            "'192.168.1.0/33' does not appear to be an IPv4 or IPv6 network",  # Actual error message
             str(context.exception),
         )
 
@@ -49,4 +49,7 @@ class TestLaneyeScan(unittest.TestCase):
         with self.assertRaises(ValueError) as context:
             scanner = NetworkScanner()
             scanner.scan_network("invalid-input")
-        self.assertIn("Invalid IP address or CIDR range", str(context.exception))
+        self.assertIn(
+            "'invalid-input' does not appear to be an IPv4 or IPv6 network",
+            str(context.exception),
+        )

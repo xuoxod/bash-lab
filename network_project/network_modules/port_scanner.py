@@ -6,9 +6,7 @@ import logging
 import ipaddress
 from typing import Dict, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from network_modules.helpers.utils import format_scan_result
-from network_modules.helpers.colors import TextColors
-from network_modules.helpers.utils import _validate_target
+from network_modules.helpers.utils import Utils  # Import the Utils class
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -36,7 +34,7 @@ class PortScanner:
 
     def scan_network(self, target: str, ports: List[int]) -> Dict[str, List[int]]:
         """Scans a network range or a single IP for open ports."""
-        _validate_target(target)  # Validate target here
+        Utils.validate_target(target)  # Validate target here
         results = {}
         try:
             # Validate the target before proceeding
@@ -65,25 +63,19 @@ class PortScanner:
                 open_ports.append(port)
         return open_ports
 
-    def print_results(self, results: Dict[str, List[int]]) -> None:
-        """Prints the scan results to the console."""
-        for ip, open_ports in results.items():
-            print(format_scan_result(ip, open_ports))  # Consistent output
-            if open_ports:
-                for port in open_ports:
-                    print(f"{TextColors.OKBLUE}\tPort {port}: Open{TextColors.ENDC}")
-            else:
-                print(f"{TextColors.FAIL}\tNo open ports found{TextColors.ENDC}")
-
     def raw_print_results(self, results: Dict[str, List[int]]) -> None:
         """Prints the scan results to the console."""
         for ip, open_ports in results.items():
-            print(format_scan_result(ip, open_ports))  # Consistent output
+            print(Utils.format_scan_result(ip, open_ports))  # Consistent output
             if open_ports:
                 for port in open_ports:
                     print(f"\tPort {port}: Open")  # Removed color codes
             else:
                 print("\tNo open ports found")  # Removed color codes
+
+    def print_results(self, results: Dict[str, List[int]]) -> None:
+        """Prints the scan results to the console."""
+        Utils.print_scan_results(results)  # Use the static method from Utils
 
 
 if __name__ == "__main__":
@@ -92,4 +84,4 @@ if __name__ == "__main__":
     target_ip = "192.168.1.1"  # Replace with your target IP or CIDR range
     ports_to_scan = [22, 80, 443, 3389]  # Replace with the ports you want to scan
     scan_results = scanner.scan_network(target_ip, ports_to_scan)
-    scanner.print_results(scan_results)
+    Utils.print_scan_results(scan_results)

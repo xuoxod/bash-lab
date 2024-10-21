@@ -35,7 +35,7 @@ class NetworkScanner:
             ipaddress.ip_network(net_address, strict=False)  # Validate the input
         except ipaddress.AddressValueError:  # Catch the specific error
             raise ValueError(
-                f"Invalid IP address or CIDR range: {net_address}"
+                f"'{net_address}' does not appear to be an IPv4 or IPv6 network"
             ) from None  # Only raise the exception
 
         results = {}  # Use a dictionary to store results

@@ -41,7 +41,7 @@ class TestNetSage(unittest.TestCase):
         self.assertEqual(cm.exception.code, 1)  # Expect exit code 1 for error
 
         output = captured_output.getvalue()
-        self.assertIn("Invalid IP address", output)  # Check for error message
+        self.assertIn("'this.is.not.an.ip' ", output)  # Check for error message
 
     # Add more test cases for different scenarios (CIDR ranges,
     # invalid ports, port ranges, etc.)

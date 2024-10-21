@@ -4,8 +4,7 @@ import logging
 from typing import Dict, List
 
 from scapy.all import sr1, IP, TCP, ICMP
-from scapy.layers.inet import TCP, ICMP
-from network_modules.helpers.utils import format_scan_result
+from network_modules.helpers.utils import Utils  # Import the Utils class
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -50,10 +49,4 @@ class ScapyPortScanner:
 
     def print_results(self, results: Dict[str, List[int]]) -> None:
         """Prints the scan results to the console."""
-        for ip, open_ports in results.items():
-            print(format_scan_result(ip, open_ports))
-            if open_ports:
-                for port in open_ports:
-                    print(f"\tPort {port}: Open")
-            else:
-                print("\tNo open ports found")
+        Utils.print_scan_results(results)  # Use the static method from Utils

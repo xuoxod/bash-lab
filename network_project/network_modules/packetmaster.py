@@ -9,7 +9,7 @@ from datetime import datetime
 from scapy.all import *
 
 from network_modules.helpers.colors import TextColors
-from network_modules.helpers.utils import _validate_target
+from network_modules.helpers.utils import Utils
 
 
 # Predefined common protocols
@@ -48,7 +48,7 @@ def _send_custom_packet(
     protocol: str = "icmp",
 ) -> Tuple[Dict, str]:
     """Sends a custom packet and returns a dictionary containing the results."""
-    _validate_target(dst_ip)
+    Utils.validate_target(dst_ip)
     output_data = {}
     try:
         # Validate IP address
