@@ -2,7 +2,7 @@ import subprocess
 import threading
 import ipaddress
 import re
-from typing import List, Dict, Tuple
+from typing import List, Dict
 from xml.etree import ElementTree as ET
 
 

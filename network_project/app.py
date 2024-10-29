@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-from network_modules.nmportscan import CustomNmapScanner  # Corrected import path
+from network_modules.nmap_port_scanner import CustomNmapScanner
 
 
 def main():
@@ -19,23 +19,29 @@ def main():
     for key, value in CustomNmapScanner.COMMON_PORTS.items():
         print(f"{key}: {value['name']} ({value['ports']})")
     common_ports_input = input(
-        "Select common ports (enter numbers comma-separated, leave blank for custom ports): "
+        "Select common ports (enter numbers comma-separated, leave blank for none): "
     )
+
+    custom_ports_input = input(
+        "Enter custom ports (comma-separated or ranges, leave blank for none): "
+    )
+
+    # Combine common and custom ports
     if common_ports_input:
         selected_common_ports = [
             CustomNmapScanner.COMMON_PORTS[key]["ports"]
             for key in common_ports_input.split(",")
         ]
         ports = ",".join(selected_common_ports)
+        if custom_ports_input:
+            ports += f",{custom_ports_input}"
     else:
-        ports = input(
-            "Enter ports to scan (comma-separated or ranges, leave blank for default): "
-        )
+        ports = custom_ports_input  # Use custom ports or None
 
     scanner = CustomNmapScanner(targets, ports, scan_type)
 
     try:
-        scanner.scan()
+        scanner.scan(targets)
     except KeyboardInterrupt:
         scanner.stop()
 

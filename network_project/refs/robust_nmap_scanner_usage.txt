@@ -1,0 +1,13 @@
+from network_modules.robust_nmap_scanner import RobustNmapScanner
+
+# Basic scan with default settings (current network, OS detection)
+scanner = RobustNmapScanner()
+scanner.print_results()
+
+# Scan specific targets and ports
+scanner = RobustNmapScanner(targets="192.168.1.1,192.168.1.10-192.168.1.20", ports="22,80,443")
+scanner.print_results()
+
+# Use a different scan type
+scanner = RobustNmapScanner(targets="192.168.1.1", scan_type="SYN Scan (Stealth)")
+scanner.print_results()

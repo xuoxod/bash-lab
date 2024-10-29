@@ -155,7 +155,7 @@ def main():
         choices=robust_nmap_scanner.SCAN_TYPES.keys(),
         default=robust_nmap_scanner.DEFAULT_SCAN_TYPE,
         help=f"""
-        Type of Nmap scan to perform.
+        Type of Nmap scan to perform. 
         Choose from the following options (default: {robust_nmap_scanner.DEFAULT_SCAN_TYPE}):
 
         {', '.join(robust_nmap_scanner.SCAN_TYPES.keys())}
