@@ -87,6 +87,8 @@ def main():
         scanner.scan_type = "1"
 
     # Perform the scan
+    # print("Ports before Nmap:", scanner._ports)
+
     scan_results = scanner.run_scan()
 
     # Print scan results to console

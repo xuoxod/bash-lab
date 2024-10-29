@@ -84,9 +84,9 @@ class ThreadedNmapScanner:
         scan_type: str = DEFAULT_SCAN_TYPE,
     ):
         self._targets = self._parse_targets(targets) if targets else []
-        self._ports = (
-            self._parse_ports(ports) if ports else [str(p) for p in self.COMMON_PORTS]
-        )
+        self._ports = self._parse_ports(ports) if ports else []
+        if not ports:
+            self.add_common_ports()
         self.scan_type = scan_type
         self.csv_filename = "tns_scan_results.csv"  # Default CSV filename
         self.scan_results: Dict[str, Tuple[str, List[Dict]]] = {}
@@ -105,11 +105,14 @@ class ThreadedNmapScanner:
 
     def add_ports(self, ports_input: str):
         """Adds ports to the existing list of ports to scan."""
-        self._ports.extend(self._parse_ports(ports_input))
+        # self._ports.extend(self._parse_ports(ports_input))
+        self._ports = self._parse_ports(ports_input)
 
     def add_common_ports(self):
-        """Adds the common ports to the list of ports to scan."""
-        self._ports = list(set(self._ports + [str(port) for port in self.COMMON_PORTS]))
+        """Adds the common ports to the list of ports to scan, avoiding duplicates."""
+        for port in self.COMMON_PORTS:
+            if str(port) not in self._ports:
+                self._ports.append(str(port))
 
     def _parse_targets(self, target_input: str) -> List[str]:
         """Parses target input, handling single IPs, ranges, and CIDR."""
@@ -166,6 +169,8 @@ class ThreadedNmapScanner:
         return ports
 
     def _execute_nmap_scan(self, target: str) -> str:  # Returns XML output
+        print("DEBUG: Ports before Nmap command:", self._ports)
+
         """Executes the Nmap scan on a single target."""
         command = [
             "nmap",

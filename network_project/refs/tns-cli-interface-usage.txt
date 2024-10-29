@@ -10,6 +10,20 @@ python tns_cli.py -t 192.168.1.1-192.168.1.10 -o scan_results.csv
 python tns-cli.py -t 192.168.1.1 
 
 ---------------------------------------------
+# Port and Scan Type Selection
+python tns-cli.py -t 192.168.1.1 
+python tns-cli.py -t 192.168.1.1 -p 80,443,8080-8085
+python tns-cli.py -t 192.168.1.1 -T 1  # SYN Scan
+python tns-cli.py -t 192.168.1.1 -T 3  # UDP Scan
+
+# CSV Output
+python tns-cli.py -t 192.168.1.1 -s
+python tns-cli.py -t 192.168.1.1 -o my_scan_results.csv
+
+# Error Handling
+python tns-cli.py -t 192.168.1.1000  # Invalid IP
+python tns-cli.py -t 192.168.1.1 -p 80-  # Invalid port range 
+
 ---------------------------------------------
 ---------------------------------------------
 ---------------------------------------------
