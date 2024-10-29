@@ -84,7 +84,9 @@ class ThreadedNmapScanner:
         scan_type: str = DEFAULT_SCAN_TYPE,
     ):
         self._targets = self._parse_targets(targets) if targets else []
-        self._ports = self._parse_ports(ports) if ports else self.COMMON_PORTS
+        self._ports = (
+            self._parse_ports(ports) if ports else [str(p) for p in self.COMMON_PORTS]
+        )
         self.scan_type = scan_type
         self.csv_filename = "tns_scan_results.csv"  # Default CSV filename
         self.scan_results: Dict[str, Tuple[str, List[Dict]]] = {}
@@ -93,6 +95,21 @@ class ThreadedNmapScanner:
         self.stop_event = threading.Event()
 
     # ... (Getters and setters for targets, ports remain the same)
+    @property
+    def ports(self):
+        return self._ports
+
+    @ports.setter
+    def ports(self, ports_input: str):
+        self._ports = self._parse_ports(ports_input)
+
+    def add_ports(self, ports_input: str):
+        """Adds ports to the existing list of ports to scan."""
+        self._ports.extend(self._parse_ports(ports_input))
+
+    def add_common_ports(self):
+        """Adds the common ports to the list of ports to scan."""
+        self._ports = list(set(self._ports + [str(port) for port in self.COMMON_PORTS]))
 
     def _parse_targets(self, target_input: str) -> List[str]:
         """Parses target input, handling single IPs, ranges, and CIDR."""
@@ -292,10 +309,10 @@ class ThreadedNmapScanner:
         self.output_queue.join()
 
         # Ask user if they want to save results to CSV
-        save_to_csv = input("Save results to CSV file? (y/n): ")
+        # save_to_csv = input("Save results to CSV file? (y/n): ")
 
-        if save_to_csv.lower() == "y":
-            self.save_results_to_csv()
+        # if save_to_csv.lower() == "y":
+        #     self.save_results_to_csv()
 
         # ... (Optionally wait for threads to finish: threads.join(), output_thread.join())
 
@@ -362,9 +379,10 @@ class ThreadedNmapScanner:
         except Exception as e:
             self.print_error(f"Error saving results to CSV: {e}")
 
-    @property
-    def ports(self):
-        return self._ports
+    def run_scan(self):
+        """Starts the threaded scan and returns the results."""
+        self.scan()  # Use the existing scan method
+        return self.scan_results
 
 
 if __name__ == "__main__":
