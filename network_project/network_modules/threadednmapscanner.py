@@ -169,21 +169,34 @@ class ThreadedNmapScanner:
         return ports
 
     def _execute_nmap_scan(self, target: str) -> str:  # Returns XML output
-        print("DEBUG: Ports before Nmap command:", self._ports)
+        # print("DEBUG: Ports before Nmap command:", self._ports)
 
         """Executes the Nmap scan on a single target."""
+
+        # Determine if the selected scan type is a stealth scan
+        is_stealth_scan = self.scan_type in ["1", "4", "5", "6"]  # SYN, FIN, NULL, Xmas
+
         command = [
             "nmap",
             "-v",
             "-oX",
             "-",  # Output XML to stdout
-            self.SCAN_TYPES[self.scan_type][
-                "arguments"
-            ],  # Use selected scan type arguments
-            "-p",
-            ",".join(self._ports),
-            target,
         ]
+
+        # Add -O flag only if it's not a stealth scan
+        if not is_stealth_scan:
+            command.append("-O")
+
+        command.extend(
+            [
+                self.SCAN_TYPES[self.scan_type][
+                    "arguments"
+                ],  # Use selected scan type arguments
+                "-p",
+                ",".join(self._ports),
+                target,
+            ]
+        )
 
         try:
             process = subprocess.run(
@@ -222,8 +235,21 @@ class ThreadedNmapScanner:
                     self.print_status(output)
                 else:
                     if output:  # Only process if there's XML output
-                        hostname, open_ports = self._process_nmap_output(target, output)
-                        self.scan_results[target] = (hostname, open_ports)
+                        hostname, open_ports, os_info = self._process_nmap_output(
+                            target, output
+                        )
+                        # Update the existing entry, don't overwrite it
+                        if target not in self.scan_results:
+                            self.scan_results[target] = (hostname, open_ports, os_info)
+                        else:
+                            existing_hostname, existing_ports, _ = self.scan_results[
+                                target
+                            ]
+                            self.scan_results[target] = (
+                                existing_hostname,
+                                existing_ports,
+                                os_info,
+                            )
                         self.print_results(target)
                 self.output_queue.task_done()
             except queue.Empty:
@@ -231,12 +257,13 @@ class ThreadedNmapScanner:
 
     def _process_nmap_output(
         self, target: str, xml_output: str
-    ) -> Tuple[str, List[Dict]]:
-        """Parses the XML output from Nmap."""
+    ) -> Tuple[str, List[Dict], str]:  # Add str for OS
+        """Parses the XML output from Nmap, including OS detection."""
         try:
             root = ET.fromstring(xml_output)
             hostname = "N/A"
             open_ports = []
+            os_info = "N/A"  # Initialize OS information
 
             for host in root.findall("host"):
                 # Extract hostname
@@ -244,28 +271,49 @@ class ThreadedNmapScanner:
                 if hostnames:
                     hostname = hostnames[0].get("name", "N/A")
 
-                # Extract open ports
+                # Extract OS information
+                os_element = host.find("os")
+                if os_element is not None:
+                    osmatch_element = os_element.find("osmatch")
+                    if osmatch_element is not None:
+                        os_info = osmatch_element.get("name", "N/A")
+                    else:
+                        # If osmatch not found, try osclass
+                        osclass_element = os_element.find("osclass")
+                        if osclass_element is not None:
+                            os_info = osclass_element.get("osfamily", "N/A")
+
+                # Extract open ports (this part remains the same)
                 for port in host.findall("ports/port"):
                     if port.find("state").get("state") == "open":
+                        service_element = port.find("service")
+                        if service_element is not None:
+                            service_name = service_element.get("name", "N/A")
+                        else:
+                            service_name = "N/A"
+
                         port_info = {
                             "port": port.get("portid"),
                             "protocol": port.get("protocol"),
-                            "service": port.find("service").get("name", "N/A"),
+                            "service": service_name,
                             "state": port.find("state").get("state"),
                         }
                         open_ports.append(port_info)
 
-            return hostname, open_ports
+            return hostname, open_ports, os_info  # Return OS info
 
         except ET.ParseError as e:
             self.print_error(f"Error parsing Nmap output: {e}")
-            return "N/A", []
+            return "N/A", [], "N/A"  # Return N/A for OS on error
 
     def print_results(self, target: str = None) -> None:
-        """Prints the scan results in a colorful and organized format."""
+        """Prints the scan results, including OS information."""
         if target:
-            hostname, results = self.scan_results.get(target, ("N/A", []))
+            hostname, results, os_info = self.scan_results.get(
+                target, ("N/A", [], "N/A")
+            )
             print(f"{TextColors.HEADER}Host: {hostname} ({target}){TextColors.ENDC}")
+            print(f"{TextColors.OKGREEN}OS: {os_info}{TextColors.ENDC}")  # Print OS
 
             if results:
                 print(
