@@ -75,6 +75,8 @@ class ThreadedNmapScanner:
         # ... Add more scan types here ...
     }
 
+    STEALTH_SCAN_TYPES = ["1", "4", "5", "6"]  # Define stealth scan types
+
     DEFAULT_SCAN_TYPE = "11"  # Default to OS Detection
 
     def __init__(
@@ -106,7 +108,7 @@ class ThreadedNmapScanner:
     @property
     def is_stealth_scan(self) -> bool:
         """Returns True if the selected scan type is a stealth scan."""
-        return self.scan_type in ["1", "4", "5", "6"]
+        return self.scan_type in self.STEALTH_SCAN_TYPES
 
     @property
     def scan_type(self):
@@ -196,8 +198,8 @@ class ThreadedNmapScanner:
             "-",  # Output XML to stdout
         ]
 
-        # Add -O flag only if it's not a stealth scan
-        if not self.is_stealth_scan:
+        # Add -O flag only if it's not a stealth scan and OS detection is enabled
+        if not self.is_stealth_scan and self.scan_type == "11":
             command.append("-O")
 
         command.extend(
@@ -401,7 +403,7 @@ class ThreadedNmapScanner:
         try:
             arp_request = ARP(pdst=ip_address)
             broadcast = Ether(dst="ff:ff:ff:ff:ff:ff")
-            arp_request_broadcast = broadcast / arp_request
+            arp_request_broadcast = broadcast / arp_request  # Corrected line
             answered_list = srp(arp_request_broadcast, timeout=1, verbose=False)[0]
             if answered_list:
                 return answered_list[0][1].hwsrc
@@ -411,11 +413,16 @@ class ThreadedNmapScanner:
             self.print_error(f"Error getting MAC address for {ip_address}: {e}")
             return "N/A"
 
-    def save_results_to_csv(self):
+    def save_results_to_csv(self, filename: str = None):
         """Saves the scan results to a CSV file, prompting for filename if desired."""
-        save_to_default = input(f"Save to default file ({self.csv_filename})? (y/n): ")
-        if save_to_default.lower() != "y":
-            self.csv_filename = input("Enter CSV filename: ")
+        if filename is None:
+            save_to_default = input(
+                f"Save to default file ({self.csv_filename})? (y/n): "
+            )
+            if save_to_default.lower() != "y":
+                self.csv_filename = input("Enter CSV filename: ")
+        else:
+            self.csv_filename = filename
 
         try:
             with open(self.csv_filename, "a", newline="") as csvfile:
