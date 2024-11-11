@@ -589,10 +589,28 @@ def main():
     # --- Parse the arguments ---
     args = parser.parse_args()
 
+    # --- Resolve domain names to IP addresses ---
+    resolved_targets = []
+    for target in args.targets.split(","):
+        try:
+            # Try to convert the target to an IP address directly
+            socket.inet_aton(target)
+            resolved_targets.append(target)  # It's already an IP address
+        except socket.error:
+            # If it's not an IP address, try to resolve it as a domain name
+            try:
+                ip_address = socket.gethostbyname(target)
+                resolved_targets.append(ip_address)
+                print(f"Resolved {target} to {ip_address}")
+            except socket.gaierror:
+                print(
+                    f"{TextColors.FAIL}Error: Could not resolve {target}{TextColors.ENDC}"
+                )
+
     # --- Create NetworkOracle instance and run scan ---
     oracle = NetworkOracle()
     results = oracle.scan_targets(
-        targets=args.targets.split(","),
+        targets=resolved_targets,  # Use the resolved targets
         port=args.port,
         data=args.data,
         protocol=args.protocol,
