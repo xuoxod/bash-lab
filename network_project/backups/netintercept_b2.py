@@ -5,8 +5,8 @@ import scapy.all as scapy
 import netifaces  # Import netifaces to get default gateway
 import threading
 import time  # Import the time module
-import subprocess  # For running iptables commands
 
+# trunk-ignore(ruff/F401)
 from scapy.all import ARP
 
 
@@ -177,22 +177,6 @@ class NetIntercept:
         except Exception as e:
             self.print_error(f"Error restoring ARP entry: {e}")
 
-    def _enable_ip_forwarding(self):
-        """Enables IP forwarding on the system."""
-        try:
-            subprocess.check_output(["sysctl", "-w", "net.ipv4.ip_forward=1"])
-            self.print_status("IP forwarding enabled.")
-        except Exception as e:
-            self.print_error(f"Error enabling IP forwarding: {e}")
-
-    def _disable_ip_forwarding(self):
-        """Disables IP forwarding on the system."""
-        try:
-            subprocess.check_output(["sysctl", "-w", "net.ipv4.ip_forward=0"])
-            self.print_status("IP forwarding disabled.")
-        except Exception as e:
-            self.print_error(f"Error disabling IP forwarding: {e}")
-
     def _arp_spoofing_thread(self, target_ip: str, gateway_ip: str):
         """Continuously performs ARP spoofing and handles ARP responses."""
         target_mac = self.get_mac(target_ip)
@@ -212,9 +196,6 @@ class NetIntercept:
         )
 
         try:
-            # Enable IP forwarding
-            self._enable_ip_forwarding()
-
             # Start sniffing for ARP requests in a separate thread
             sniff_thread = threading.Thread(
                 target=scapy.sniff,
@@ -239,11 +220,10 @@ class NetIntercept:
             self.print_error(f"Error in ARP spoofing thread: {e}")
 
         finally:
-            # Restore ARP entries, stop sniffing, and disable IP forwarding
+            # Restore ARP entries and stop sniffing
             self.restore_arp(target_ip, gateway_ip, target_mac, gateway_mac)
             self.restore_arp(gateway_ip, target_ip, gateway_mac, target_mac)
             self.print_status(f"ARP spoofing stopped for {target_ip}")
-            self._disable_ip_forwarding()
 
     def _process_arp_packet(self, packet):
         """Processes sniffed ARP packets and sends spoofed responses."""
