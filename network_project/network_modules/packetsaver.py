@@ -1,15 +1,16 @@
 import csv
 import json
 import hashlib  # For duplicate packet handling
+import logging
+
+# Configure logging (adjust level and format as needed)
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 
 class PacketSaver:
-    def __init__(
-        self, csv_filename="packet_data.csv", json_filename="packet_data.json"
-    ):
-        self.csv_filename = csv_filename
-        self.json_filename = json_filename
-        self.seen_packets = set()  # To store hashes of seen packets
+    # ... (your existing __init__ method)
 
     def save_packet_data(self, packet_data):
         """Saves packet data to both CSV and JSON files, avoiding duplicates."""
@@ -30,8 +31,10 @@ class PacketSaver:
                 if csvfile.tell() == 0:  # Write header only if file is empty
                     writer.writeheader()
                 writer.writerow(packet_data)
+            logging.info(f"Packet data saved to CSV: {filename}")  # Log successful save
         except Exception as e:
-            print(f"Error saving to CSV: {e}")
+            logging.error(f"Error saving to CSV: {e}")  # Log the error
+            print(f"Error saving to CSV: {e}")  # Print the error to the console
 
     def _save_to_json(self, packet_data, filename):
         """Saves packet data to a JSON file."""
@@ -41,8 +44,15 @@ class PacketSaver:
                 data.append(packet_data)
                 jsonfile.seek(0)
                 json.dump(data, jsonfile, indent=4)
+            logging.info(
+                f"Packet data saved to JSON: {filename}"
+            )  # Log successful save
         except FileNotFoundError:
             with open(filename, "w") as jsonfile:
                 json.dump([packet_data], jsonfile, indent=4)
+            logging.info(
+                f"Packet data saved to JSON: {filename}"
+            )  # Log successful save
         except Exception as e:
-            print(f"Error saving to JSON: {e}")
+            logging.error(f"Error saving to JSON: {e}")  # Log the error
+            print(f"Error saving to JSON: {e}")  # Print the error to the console
