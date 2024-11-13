@@ -11,7 +11,7 @@ from networkexceptions import (
 from defaultinterfacegetter import DefaultInterfaceGetter
 
 
-class RawSocketDataGetter:
+class PacketSniffer:
     """
     Captures raw network data from a specified interface.
     """

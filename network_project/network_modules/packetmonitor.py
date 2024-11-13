@@ -10,7 +10,7 @@ from rich import print
 from rich.table import Table
 from rich.panel import Panel
 
-from rawsocketdatagetter import RawSocketDataGetter
+from packetsniffer import PacketSniffer
 from networkexceptions import (
     NetworkSnifferError,
     SocketCreationError,
@@ -31,7 +31,7 @@ class PacketMonitor:
 
         self.packet_queue = queue.Queue()
         self.stop_event = threading.Event()
-        self.data_getter = RawSocketDataGetter(interface=self.interface)
+        self.data_getter = PacketSniffer(interface=self.interface)
         self.processing_condition = self.data_getter.processing_condition
 
     def _capture_packets(self):
@@ -120,6 +120,26 @@ class PacketMonitor:
                             table.add_row("Destination Hostname", dst_hostname)
                             table.add_row("IP Protocol", str(packet[IP].proto))
 
+                        if "ICMP" in packet:
+                            table.add_row("ICMP Type", str(packet[ICMP].type))
+                            table.add_row("ICMP Code", str(packet[ICMP].code))
+                            table.add_row("ICMP ID", str(packet[ICMP].id))
+                            table.add_row("ICMP Sequence", str(packet[ICMP].seq))
+
+                        if "DNS" in packet:
+                            table.add_row(
+                                "DNS Query", str(packet[DNS].qd.qname.decode())
+                            )
+                            if packet[DNS].an:
+                                table.add_row("DNS Answer", str(packet[DNS].an.rdata))
+
+                        if "ARP" in packet:
+                            table.add_row("ARP Operation", str(packet[ARP].op))
+                            table.add_row("ARP Sender IP", str(packet[ARP].psrc))
+                            table.add_row("ARP Sender MAC", str(packet[ARP].hwsrc))
+                            table.add_row("ARP Target IP", str(packet[ARP].pdst))
+                            table.add_row("ARP Target MAC", str(packet[ARP].hwdst))
+
                         if "TCP" in packet:
                             table.add_row("TCP Source Port", str(packet[TCP].sport))
                             table.add_row(
@@ -134,7 +154,9 @@ class PacketMonitor:
                         # Add more layers and fields as needed
 
                         # Print the formatted table
-                        print(Panel(table, title="Captured Packet"))
+                        print(
+                            Panel(table, title=f"Captured Packet From {dst_hostname}")
+                        )
 
                     except Exception as e:
                         logging.error(f"Error processing packet: {e}")
