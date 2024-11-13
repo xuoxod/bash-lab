@@ -28,7 +28,9 @@ class PacketMonitor:
     def __init__(self, interface="wlp0s20f3", test_mode=False):
         self.interface = interface or DefaultInterfaceGetter.get_default_interface()
         self.test_mode = test_mode
-
+        self.save_csv = False
+        self.save_json = False
+        self.logger = logging.getLogger(__name__)
         self.packet_queue = queue.Queue()
         self.stop_event = threading.Event()
         self.data_getter = PacketSniffer(interface=self.interface)
@@ -68,6 +70,16 @@ class PacketMonitor:
             help="Network interface to monitor (default: eth0)",
         )
         parser.add_argument(
+            "--save-csv",
+            action="store_true",
+            help="Save packet data to a CSV file",
+        )
+        parser.add_argument(
+            "--save-json",
+            action="store_true",
+            help="Save packet data to a JSON file",
+        )
+        parser.add_argument(
             "-t",
             "--test",
             action="store_true",
@@ -75,6 +87,8 @@ class PacketMonitor:
         )
         args = parser.parse_args()
         self.interface = args.interface
+        self.save_csv = args.save_csv
+        self.save_json = args.save_json
         self.test_mode = args.test
 
     def _process_packets(self):
@@ -157,6 +171,20 @@ class PacketMonitor:
                         print(
                             Panel(table, title=f"Captured Packet From {dst_hostname}")
                         )
+
+                        # --- Save Packet Data (if enabled) ---
+                        if self.save_csv:
+                            print("Saving packet data to CSV...")
+                            packet_data = self._extract_packet_data(packet)
+                            self.packet_saver.save_packet_data(
+                                packet_data, "packet_data.csv"
+                            )
+                        if self.save_json:
+                            print("Saving packet data to JSON...")
+                            packet_data = self._extract_packet_data(packet)
+                            self.packet_saver.save_packet_data(
+                                packet_data, "packet_data.json"
+                            )
 
                     except Exception as e:
                         logging.error(f"Error processing packet: {e}")
