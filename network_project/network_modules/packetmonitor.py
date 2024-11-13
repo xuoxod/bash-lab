@@ -40,7 +40,12 @@ class PacketMonitor:
 
             # Wait for the processing thread to finish before stopping capture
             with self.processing_condition:
-                self.processing_condition.wait()
+                while not self.stop_event.is_set():  # Check stop_event periodically
+                    try:
+                        self.processing_condition.wait(timeout=1)  # Wait with a timeout
+                    except KeyboardInterrupt:
+                        self.print_status("Interrupt received in capture thread.")
+                        self.stop_event.set()  # Signal the thread to stop
 
         except SocketCreationError as e:
             self.logger.critical(f"Critical error: {e}")
