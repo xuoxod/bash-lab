@@ -61,29 +61,43 @@ class PacketMonitor:
             self.data_getter.stop_capture()
 
     def _parse_arguments(self):
-        """Parses command-line arguments."""
-        parser = argparse.ArgumentParser(description="Network Packet Monitor")
+        """Parses command-line arguments with detailed help."""
+        parser = argparse.ArgumentParser(
+            description="""Network Packet Monitor: A tool to capture, analyze,
+            and optionally save network packets from a specified interface.""",
+            epilog="""Examples:
+                # Capture packets on eth0 and save to CSV:
+                ./packetmonitor.py -i eth0 --save-csv
+
+                # Capture packets on wlan0 and save to JSON:
+                ./packetmonitor.py -i wlan0 --save-json
+
+                # Run in test mode (prints sample packets):
+                ./packetmonitor.py -t
+            """,
+            formatter_class=argparse.RawDescriptionHelpFormatter,  # Preserve formatting
+        )
         parser.add_argument(
             "-i",
             "--interface",
             default="eth0",
-            help="Network interface to monitor (default: eth0)",
+            help="Network interface to monitor (default: eth0). Example: eth0, wlan0",
         )
         parser.add_argument(
             "--save-csv",
             action="store_true",
-            help="Save packet data to a CSV file",
+            help="Save captured packet data to a CSV file named 'packet_data.csv'.",
         )
         parser.add_argument(
             "--save-json",
             action="store_true",
-            help="Save packet data to a JSON file",
+            help="Save captured packet data to a JSON file named 'packet_data.json'.",
         )
         parser.add_argument(
             "-t",
             "--test",
             action="store_true",
-            help="Run in test mode (prints sample packets)",
+            help="Run in test mode. Instead of live capture, prints sample packet data.",
         )
         args = parser.parse_args()
         self.interface = args.interface
