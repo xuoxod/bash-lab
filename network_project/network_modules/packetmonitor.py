@@ -5,6 +5,7 @@ import time
 import logging
 import argparse
 
+# trunk-ignore(ruff/F403)
 from scapy.all import *  # Import Scapy for packet parsing
 from rich import print
 from rich.table import Table
