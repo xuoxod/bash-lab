@@ -17,6 +17,7 @@ from networkexceptions import (
     SocketBindingError,
 )
 from defaultinterfacegetter import DefaultInterfaceGetter
+from packetsaver import PacketSaver
 
 # Configure logging (adjust level and format as needed)
 logging.basicConfig(
@@ -35,30 +36,43 @@ class PacketMonitor:
         self.stop_event = threading.Event()
         self.data_getter = PacketSniffer(interface=self.interface)
         self.processing_condition = self.data_getter.processing_condition
+        self.packet_saver = PacketSaver()
 
     def _capture_packets(self):
-        try:
-            self.data_getter.start_capture()
+        if self.test_mode:
+            # Sample packet data (replace with your actual test data)
+            sample_packets = [
+                b"\x00\x15\x5d\x01\x02\x1c\x00\x0c\x29\x96\x8f\x9b\x08\x00\x45\x00\x00\x3c\x4c\x9b\x40\x00\x40\x06\x7c\x9c\xc0\xa8\x01\x65\xac\x1f\x02\xd1\x04\x03\x08\x0a\x02\x9e\x73\x9d\x00\x00\x00\x00\x70\x02\xfa\xf0\xb1\x10\x00\x00\x00\x00\x00\x00\x00\x00",
+                # ... more sample packets ...
+            ]
+            for packet in sample_packets:
+                self.data_getter.data_queue.put(packet)
+                time.sleep(1)  # Simulate packet arrival
+        else:
+            try:
+                self.data_getter.start_capture()
 
-            # Wait for the processing thread to finish before stopping capture
-            with self.processing_condition:
-                while not self.stop_event.is_set():  # Check stop_event periodically
-                    try:
-                        self.processing_condition.wait(timeout=1)  # Wait with a timeout
-                    except KeyboardInterrupt:
-                        self.print_status("Interrupt received in capture thread.")
-                        self.stop_event.set()  # Signal the thread to stop
+                # Wait for the processing thread to finish before stopping capture
+                with self.processing_condition:
+                    while not self.stop_event.is_set():  # Check stop_event periodically
+                        try:
+                            self.processing_condition.wait(
+                                timeout=1
+                            )  # Wait with a timeout
+                        except KeyboardInterrupt:
+                            self.print_status("Interrupt received in capture thread.")
+                            self.stop_event.set()  # Signal the thread to stop
 
-        except SocketCreationError as e:
-            self.logger.critical(f"Critical error: {e}")
-        except SocketBindingError as e:
-            self.logger.error(f"Error binding socket: {e}")
-        except NetworkSnifferError as e:
-            self.logger.error(f"Error in network sniffer: {e}")
-        except Exception as e:
-            self.logger.exception(f"Unexpected error in _capture_packets: {e}")
-        finally:
-            self.data_getter.stop_capture()
+            except SocketCreationError as e:
+                self.logger.critical(f"Critical error: {e}")
+            except SocketBindingError as e:
+                self.logger.error(f"Error binding socket: {e}")
+            except NetworkSnifferError as e:
+                self.logger.error(f"Error in network sniffer: {e}")
+            except Exception as e:
+                self.logger.exception(f"Unexpected error in _capture_packets: {e}")
+            finally:
+                self.data_getter.stop_capture()
 
     def _parse_arguments(self):
         """Parses command-line arguments with detailed help."""
@@ -104,6 +118,67 @@ class PacketMonitor:
         self.save_csv = args.save_csv
         self.save_json = args.save_json
         self.test_mode = args.test
+
+    def _extract_packet_data(self, packet):
+        """Extracts relevant data from a parsed Scapy packet."""
+        packet_data = {}
+
+        try:
+            packet_data["Timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            packet_data["Ethernet_Source_MAC"] = packet.src
+            packet_data["Ethernet_Destination_MAC"] = packet.dst
+            packet_data["Ethernet_Type"] = str(packet.type)
+
+            if "IP" in packet:
+                packet_data["IP_Source"] = packet[IP].src
+                packet_data["IP_Destination"] = packet[IP].dst
+                packet_data["IP_Protocol"] = str(packet[IP].proto)
+
+                try:
+                    packet_data["Source_Hostname"] = socket.gethostbyaddr(
+                        packet[IP].src
+                    )[0]
+                except socket.herror:
+                    packet_data["Source_Hostname"] = "Unknown"
+
+                try:
+                    packet_data["Destination_Hostname"] = socket.gethostbyaddr(
+                        packet[IP].dst
+                    )[0]
+                except socket.herror:
+                    packet_data["Destination_Hostname"] = "Unknown"
+
+            if "ICMP" in packet:
+                packet_data["ICMP_Type"] = str(packet[ICMP].type)
+                packet_data["ICMP_Code"] = str(packet[ICMP].code)
+                packet_data["ICMP_ID"] = str(packet[ICMP].id)
+                packet_data["ICMP_Sequence"] = str(packet[ICMP].seq)
+
+            if "DNS" in packet:
+                packet_data["DNS_Query"] = str(packet[DNS].qd.qname.decode())
+                if packet[DNS].an:
+                    packet_data["DNS_Answer"] = str(packet[DNS].an.rdata)
+
+            if "ARP" in packet:
+                packet_data["ARP_Operation"] = str(packet[ARP].op)
+                packet_data["ARP_Sender_IP"] = str(packet[ARP].psrc)
+                packet_data["ARP_Sender_MAC"] = str(packet[ARP].hwsrc)
+                packet_data["ARP_Target_IP"] = str(packet[ARP].pdst)
+                packet_data["ARP_Target_MAC"] = str(packet[ARP].hwdst)
+
+            if "TCP" in packet:
+                packet_data["TCP_Source_Port"] = str(packet[TCP].sport)
+                packet_data["TCP_Destination_Port"] = str(packet[TCP].dport)
+            elif "UDP" in packet:
+                packet_data["UDP_Source_Port"] = str(packet[UDP].sport)
+                packet_data["UDP_Destination_Port"] = str(packet[UDP].dport)
+
+            # Add more layers and fields as needed
+
+        except Exception as e:
+            logging.error(f"Error extracting packet data: {e}")
+
+        return packet_data
 
     def _process_packets(self):
         while not self.stop_event.is_set():
