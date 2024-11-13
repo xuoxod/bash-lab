@@ -2,7 +2,13 @@ import socket
 import threading
 import queue
 import logging  # Import logging here
-from networkexceptions import SocketCreationError, SocketBindingError
+import netifaces  # Import netifaces
+from networkexceptions import (
+    SocketCreationError,
+    SocketBindingError,
+    DefaultInterfaceNotFoundError,
+)
+from defaultinterfacegetter import DefaultInterfaceGetter
 
 
 class RawSocketDataGetter:
@@ -10,15 +16,13 @@ class RawSocketDataGetter:
     Captures raw network data from a specified interface.
     """
 
-    def __init__(self, interface="eth0", buffer_size=65536, logger=None):
-        self.interface = interface
+    def __init__(self, interface=None, buffer_size=65536, logger=None):
+        self.interface = interface or DefaultInterfaceGetter.get_default_interface()
         self.buffer_size = buffer_size
         self.stop_event = threading.Event()
         self.data_queue = queue.Queue()  # Thread-safe queue for data transfer
         self.processing_condition = threading.Condition()  # Add the condition here
-        self.logger = logger or logging.getLogger(
-            __name__
-        )  # Use provided logger or default
+        self.logger = logger or logging.getLogger(__name__)
 
     def _capture_loop(self):
         """
@@ -43,7 +47,9 @@ class RawSocketDataGetter:
         except socket.error as se:
             self.logger.error(f"Socket error in _capture_loop: {se}")
             raise SocketCreationError(f"Failed to create raw socket: {se}") from se
-            # Consider additional handling for specific socket errors
+        except SocketBindingError as sbe:
+            self.logger.error(f"Socket binding error in _capture_loop: {sbe}")
+            raise SocketBindingError(f"Failed to bind the raw socket: {sbe}") from sbe
         except Exception as exc:
             self.logger.error(f"Unexpected error in _capture_loop: {exc}")
             raise Exception(f"General error in _capture_loop: {exc}") from exc

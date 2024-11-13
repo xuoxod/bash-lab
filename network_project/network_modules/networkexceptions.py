@@ -1,6 +1,3 @@
-# network_exceptions.py
-
-
 class NetworkSnifferError(Exception):
     """Base class for exceptions in the network sniffer module."""
 
@@ -15,5 +12,11 @@ class SocketCreationError(NetworkSnifferError):
 
 class SocketBindingError(NetworkSnifferError):
     """Raised when there's an error binding the socket to the interface."""
+
+    pass
+
+
+class DefaultInterfaceNotFoundError(Exception):
+    """Raised when the default network interface cannot be determined."""
 
     pass
