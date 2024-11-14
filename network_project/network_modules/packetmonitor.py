@@ -259,7 +259,7 @@ class PacketMonitor:
 
                         # Print the formatted table
                         print(
-                            Panel(table, title=f"Captured Packet From {dst_hostname}")
+                            Panel(table, title=f"Captured Packet From {src_hostname}")
                         )
 
                         # --- Save Packet Data (if enabled) ---
