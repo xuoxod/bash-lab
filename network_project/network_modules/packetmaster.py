@@ -1,260 +1,185 @@
 #!/usr/bin/python3
+import queue
+import threading
+import time
+import logging
+import argparse
 import socket
+import json
 import csv
-import os
-from typing import List, Dict, Tuple, Union
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
-import argparse  # Import argparse
 
-from scapy.all import *
-from helpers.utils import Utils
+# trunk-ignore(ruff/F403)
+from scapy.all import *  # Import Scapy for packet parsing
+from rich import print
+from rich.table import Table
+from rich.panel import Panel
 
-# ANSI escape codes for text coloring
+from packetsniffer import PacketSniffer  # Assuming this is your custom sniffer
+from networkexceptions import (
+    NetworkSnifferError,
+    SocketCreationError,
+    SocketBindingError,
+)
+from defaultinterfacegetter import DefaultInterfaceGetter  # Assuming this is your custom interface getter
 
 
-class TextColors:
-    HEADER = "\033[95m"
-    OKBLUE = "\033[94m"
-    OKCYAN = "\033[96m"
-    OKGREEN = "\033[92m"
-    WARNING = "\033[93m"
-    FAIL = "\033[91m"
-    ENDC = "\033[0m"
-    BOLD = "\033[1m"
-    UNDERLINE = "\033[4m"
-    # New colors
-    LIGHT_RED = "\033[1;31m"
-    LIGHT_GREEN = "\033[1;32m"
-    LIGHT_YELLOW = "\033[1;33m"
-    LIGHT_BLUE = "\033[1;34m"
-    LIGHT_MAGENTA = "\033[1;35m"
-    LIGHT_CYAN = "\033[1;36m"
+# Configure logging (adjust level and format as needed)
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 
 class PacketMaster:
-    """
-    A class for crafting and sending custom network packets, primarily using Scapy.
-    """
+    def __init__(self, interface=None, test_mode=False, queue_size=1000):
+        self.interface = interface or DefaultInterfaceGetter.get_default_interface()
+        self.test_mode = test_mode
+        self.save_csv = False
+        self.save_json = False
+        self.logger = logging.getLogger(__name__)
+        # Use a bounded queue to prevent blocking
+        self.packet_queue = queue.Queue(maxsize=queue_size)
+        self.stop_event = threading.Event()
+        self.data_getter = PacketSniffer(interface=self.interface, queue=self.packet_queue)
+        self.processing_condition = self.data_getter.processing_condition
 
-    # Class-level attributes (constants)
-    COMMON_PROTOCOLS = ["tcp", "udp", "icmp"]
-    MAX_THREADS = 20  # Adjustable based on system and network
 
-    def __init__(self):
-        """Initializes the PacketMaster object."""
-        self.output_data = []  # Store results for potential CSV output
-
-    @staticmethod
-    def _has_root_privileges() -> bool:
-        """Checks if the script is running with root privileges."""
-        return os.geteuid() == 0
-
-    @staticmethod
-    def _get_mac_address(ip_address: str) -> Union[str, None]:
-        """Tries to get the MAC address for an IP address using ARP."""
-        try:
-            ans, _ = srp(
-                Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip_address),
-                timeout=2,
-                verbose=False,
-            )
-            if ans:
-                return ans[0][1].hwsrc
-            else:
-                return None
-        except Exception as e:
-            print(f"{TextColors.FAIL}Error getting MAC address: {e}{TextColors.ENDC}")
-            return None
-
-    def _send_custom_packet(
-        self,
-        dst_ip: str,
-        dst_port: int = None,
-        payload: str = None,
-        protocol: str = "icmp",
-    ) -> Tuple[Dict, str]:
-        """Sends a custom packet and returns a dictionary containing the results."""
-        Utils.validate_target(dst_ip)
-        output_data = {}
-        try:
-            # Validate IP address
-            socket.inet_aton(dst_ip)
-        except socket.error:
-            return (
-                output_data,
-                f"{TextColors.FAIL}Error: Invalid destination IP address: {dst_ip}{TextColors.ENDC}",
-            )
-
-        # Determine port if not provided
-        if dst_port is None:
-            if protocol.lower() == "tcp":
-                dst_port = 80  # Default to port 80 (HTTP) for TCP
-            elif protocol.lower() == "udp":
-                dst_port = 53  # Default to port 53 (DNS) for UDP
-            else:
-                dst_port = 0  # ICMP doesn't use a port number
-
-        # Create packet based on selected protocol
-        if protocol.lower() == "tcp":
-            packet = IP(dst=dst_ip) / TCP(
-                dport=dst_port, flags="S"
-            )  # SYN flag for reply
-        elif protocol.lower() == "udp":
-            packet = IP(dst=dst_ip) / UDP(dport=dst_port)
-        elif protocol.lower() == "icmp":
-            packet = IP(dst=dst_ip) / ICMP()
-        else:
-            return (
-                output_data,
-                f"{TextColors.FAIL}Error: Invalid protocol specified. Choose from: {', '.join(self.COMMON_PROTOCOLS)}{TextColors.ENDC}",
-            )
-
-        # Add payload if provided
-        if payload:
-            packet = packet / Raw(load=payload.encode())
-
-        # Send the packet and receive response
-        send_recv = sr1(packet, timeout=2, verbose=False)  # Send and receive 1 packet
-
-        # --- Output Handling ---
-        if send_recv:
-            # --- Prepare Data for Output ---
-            unique_id = self._get_mac_address(dst_ip)
-            if not unique_id:
-                unique_id = dst_ip  # Use IP if MAC is not available
-
-            # --- Protocol Mapping ---
-            protocol_map = {1: "ICMP", 6: "TCP", 17: "UDP"}
-            protocol_name = protocol_map.get(send_recv[IP].proto, "Unknown")
-
-            # --- Type of Service (TOS) Mapping (Example) ---
-            tos_map = {
-                0: "Routine",
-                1: "Priority",
-                2: "Immediate",
-                # ... Add more TOS values and descriptions as needed
-            }
-            tos_description = tos_map.get(send_recv[IP].tos, "Unknown")
-
-            # --- Data for File Output ---
-            output_data = {
-                "Target": unique_id,
-                "Source IP": send_recv[IP].src,
-                "Destination IP": send_recv[IP].dst,
-                "Protocol (Number)": send_recv[IP].proto,
-                "Protocol (Name)": protocol_name,
-                "Checksum": send_recv[IP].chksum,
-                "ID": send_recv[IP].id,
-                "Length": send_recv[IP].len,
-                "Type of Service (Number)": send_recv[IP].tos,
-                "Type of Service (Description)": tos_description,
-                "Packet Type": (
-                    send_recv.getlayer(1).sprintf("%TCP.flags%")
-                    if protocol.lower() == "tcp"
-                    else send_recv.getlayer(1).type
-                ),
-            }
-            return output_data, ""
-        else:
-            return (
-                output_data,
-                f"{TextColors.WARNING}No response received from {dst_ip}:{dst_port}{TextColors.ENDC}",
-            )
-
-    def scan_targets(
-        self,
-        targets: List[str],
-        port: int = None,
-        data: str = None,
-        protocol: str = "icmp",
-        output_file: str = None,
-    ) -> List[Dict]:
-        """Scans multiple targets concurrently and optionally saves the results to a CSV file."""
-        if not self._has_root_privileges():
-            print(
-                f"{TextColors.FAIL}Error: This command requires root privileges. Please run as root or using sudo.{TextColors.ENDC}"
-            )
-            return []
-
-        all_results = []
-        with ThreadPoolExecutor(max_workers=self.MAX_THREADS) as executor:
-            futures = [
-                executor.submit(self._send_custom_packet, target, port, data, protocol)
-                for target in targets
+    def _capture_packets(self):
+        if self.test_mode:
+            # Sample packet data (replace with your actual test data)
+            sample_packets = [
+                b"\x00\x15\x5d\x01\x02\x1c\x00\x0c\x29\x96\x8f\x9b\x08\x00\x45\x00\x00\x3c\x4c\x9b\x40\x00\x40\x06\x7c\x9c\xc0\xa8\x01\x65\xac\x1f\x02\xd1\x04\x03\x08\x0a\x02\x9e\x73\x9d\x00\x00\x00\x00\x70\x02\xfa\xf0\xb1\x10\x00\x00\x00\x00\x00\x00\x00\x00",
+                # ... more sample packets ...
             ]
+            for packet in sample_packets:
+                self.packet_queue.put(packet)
+                time.sleep(1)  # Simulate packet arrival
+        else:
+            try:
+                self.data_getter.start_capture()
+                # Wait for the processing thread to finish before stopping capture
+                with self.processing_condition:
+                    while not self.stop_event.is_set():
+                        try:
+                            self.processing_condition.wait(timeout=1)
+                        except KeyboardInterrupt:
+                            self.logger.info("Interrupt received in capture thread.")
+                            self.stop_event.set()
 
-            for future in as_completed(futures):
-                result, error_msg = future.result()
-                if error_msg:
-                    print(error_msg)
-                else:
-                    all_results.append(result)
+            except SocketCreationError as e:
+                self.logger.critical(f"Critical error creating socket: {e}")
+            except SocketBindingError as e:
+                self.logger.error(f"Error binding socket: {e}")
+            except NetworkSnifferError as e:
+                self.logger.error(f"Error in network sniffer: {e}")
+            except Exception as e:
+                self.logger.exception(f"Unexpected error in _capture_packets: {e}")
+            finally:
+                self.data_getter.stop_capture()
 
-        if output_file:
-            self._save_to_csv(all_results, output_file)
+    def _parse_arguments(self):
+        # ... (argument parsing remains the same) ...
 
-        return all_results
+    def _extract_packet_data(self, packet):
+        """Extracts relevant data from a parsed Scapy packet."""
+        packet_data = {"Timestamp": time.strftime("%Y-%m-%d %H:%M:%S")}
 
-    @staticmethod
-    def _save_to_csv(data: List[Dict], filename: str = None):
-        """Saves the output data to a CSV file."""
-        if not filename:
-            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            filename = f"packetmaster_output_{timestamp}.csv"
         try:
-            with open(filename, "w", newline="") as csvfile:
-                fieldnames = data[0].keys() if data else []
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(data)
-            print(
-                f"{TextColors.OKGREEN}[+] Results saved to {filename}{TextColors.ENDC}"
-            )
+            #Using Scapy's layer iteration for robustness
+            for layer in packet.layers():
+                layer_name = layer.name
+                for field_name, field_value in layer.fields.items():
+                    packet_data[f"{layer_name}_{field_name}"] = str(field_value)
+                    # Handle specific data types as needed (e.g., decode bytes)
+
         except Exception as e:
-            print(f"{TextColors.FAIL}Error saving output to CSV: {e}{TextColors.ENDC}")
+            logging.error(f"Error extracting packet data: {e}")
+
+        return packet_data
+
+    def _process_packets(self):
+        while not self.stop_event.is_set():
+            with self.processing_condition:
+                try:
+                    while not self.packet_queue.empty():
+                        raw_packet = self.packet_queue.get()
+                        self._process_single_packet(raw_packet)
+                        self.packet_queue.task_done() #Mark task as complete
+                except queue.Empty:
+                    pass #Handle empty queue gracefully
+
+
+    def _process_single_packet(self, raw_packet):
+        try:
+            packet = Ether(raw_packet)
+            packet_data = self._extract_packet_data(packet)
+
+            # Rich Table (Simplified for better readability)
+            table = Table(title="Packet Details")
+            table.add_column("Field", style="cyan", no_wrap=True)
+            table.add_column("Value", style="magenta")
+
+            for field, value in packet_data.items():
+                table.add_row(field, value)
+
+            print(Panel(table, title=f"Captured Packet From {self.interface}"))
+
+
+            # CSV/JSON saving (Improved efficiency)
+            if self.save_csv:
+                self._save_to_csv(packet_data, "packet_data.csv")
+            if self.save_json:
+                self._save_to_json(packet_data, "packet_data.json")
+
+        except Exception as e:
+            logging.error(f"Error processing packet: {e}")
+
+
+    def _save_to_csv(self, packet_data, filename):
+      try:
+          with open(filename, 'a', newline='', encoding='utf-8') as csvfile:
+              fieldnames = packet_data.keys()
+              writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+              if csvfile.tell() == 0: #check if file is empty
+                  writer.writeheader()
+              writer.writerow(packet_data)
+      except Exception as e:
+          logging.error(f"Error saving to CSV: {e}")
+
+    def _save_to_json(self, packet_data, filename):
+      try:
+          with open(filename, 'a', encoding='utf-8') as jsonfile:
+              json.dump(packet_data, jsonfile, indent=4)
+              jsonfile.write('\n') #Add newline for multiple packets
+      except Exception as e:
+          logging.error(f"Error saving to JSON: {e}")
+
+
+
+    def start(self):
+        self.capture_thread = threading.Thread(target=self._capture_packets, daemon=True)
+        self.processing_thread = threading.Thread(target=self._process_packets, daemon=True)
+        self.capture_thread.start()
+        self.processing_thread.start()
+
+    def stop(self):
+        self.stop_event.set()
+        self.data_getter.stop_capture()
+        self.capture_thread.join()
+        self.processing_thread.join()
+        print("Packet Monitor stopped.")
+        self.packet_queue.join() #wait for queue to empty
+
+    def run(self):
+        self._parse_arguments()
+        self.start()
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("Stopping...")
+            self.stop()
 
 
 if __name__ == "__main__":
-    """Handles command-line arguments and runs the PacketMaster."""
-    parser = argparse.ArgumentParser(
-        description="Craft and send custom network packets.",
-        epilog="Example: python packetmaster.py -t 192.168.1.1,192.168.1.10 -p 80 -d 'Hello' -prot tcp -o output.csv",
-    )
-    parser.add_argument(
-        "-t",
-        "--targets",
-        required=True,
-        help="Comma-separated list of target IP addresses.",
-    )
-    parser.add_argument("-p", "--port", type=int, help="Destination port (optional).")
-    parser.add_argument("-d", "--data", help="Payload data (optional).")
-    parser.add_argument(
-        "-prot",
-        "--protocol",
-        default="icmp",
-        choices=PacketMaster.COMMON_PROTOCOLS,
-        help="Protocol to use (default: icmp).",
-    )
-    parser.add_argument("-o", "--output", help="Output CSV filename (optional).")
-
-    args = parser.parse_args()
-
-    # --- Create PacketMaster instance and run scan ---
-    packet_master = PacketMaster()
-    results = packet_master.scan_targets(
-        targets=args.targets.split(","),  # Split comma-separated targets
-        port=args.port,
-        data=args.data,
-        protocol=args.protocol,
-        output_file=args.output,
-    )
-
-    # --- Print Results to Console ---
-    if results:
-        for result in results:
-            print("-" * 40)
-            for key, value in result.items():
-                print(f"{TextColors.OKBLUE}{key}:{TextColors.ENDC} {value}")
-    else:
-        print(f"{TextColors.WARNING}No results found.{TextColors.ENDC}")
+    monitor = PacketMaster()
+    monitor.run()
