@@ -1,5 +1,7 @@
 import logging
 import re
+import sys
+import argparse
 from typing import Dict, Union
 
 # Configure logging (adjust level and format as needed)
@@ -12,10 +14,9 @@ class PacketSanitizer:
     """
     Sanitizes network data while preserving the original for potential analysis.
 
+    This class can be used either programmatically or from the command line.
+
     Attributes:
-        data (Union[bytes, str]): The network data to be sanitized.
-        sanitized_data (Union[bytes, str, None]): The sanitized network data.
-        original_data (Union[bytes, str, None]): The original network data before sanitization.
         sanitization_map (Dict[str, str]): A dictionary mapping original data to sanitized data.
 
     Methods:
@@ -27,14 +28,13 @@ class PacketSanitizer:
             Sanitizes bytes data.
         get_sanitization_map(self) -> Dict[str, str]:
             Returns a dictionary mapping original data to sanitized data.
+        main():
+            Provides a command-line interface for the sanitizer.
     """
 
     def __init__(self):
         """Initializes the PacketSanitizer object."""
         self.logger = logging.getLogger(__name__)
-        self.data = None
-        self.sanitized_data = None
-        self.original_data = None
         self.sanitization_map = {}
 
     def sanitize(self, data: Union[bytes, str]) -> Union[bytes, str, None]:
@@ -48,16 +48,14 @@ class PacketSanitizer:
             Union[bytes, str, None]: The sanitized network data, or None if an error occurred.
         """
         try:
-            self.original_data = data
             if isinstance(data, str):
-                self.sanitized_data = self._sanitize_string(data)
+                return self._sanitize_string(data)
             elif isinstance(data, bytes):
-                self.sanitized_data = self._sanitize_bytes(data)
+                return self._sanitize_bytes(data)
             else:
                 raise TypeError(
                     f"Unsupported data type: {type(data)}. Expected str or bytes."
                 )
-            return self.sanitized_data
         except Exception as e:
             self.logger.error(f"Error sanitizing data: {e}")
             return None
@@ -72,8 +70,9 @@ class PacketSanitizer:
         Returns:
             str: The sanitized string data.
         """
-        # Example: Replace IP addresses with '***.***.***.***'
+        # Example: Replace IP addresses and email addresses
         sanitized_data = re.sub(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", "***.***.***.***", data)
+        sanitized_data = re.sub(r"[\w.-]+@[\w.-]+", "****@****.***", sanitized_data)
         self.sanitization_map.update({data: sanitized_data})
         return sanitized_data
 
@@ -87,9 +86,12 @@ class PacketSanitizer:
         Returns:
             bytes: The sanitized bytes data.
         """
-        # Example: Replace all occurrences of 'secret' with '*******'
+        # Example: Replace all occurrences of 'secret' and 'password'
         sanitized_data = data.replace(b"secret", b"*******")
-        self.sanitization_map.update({data.decode(): sanitized_data.decode()})
+        sanitized_data = sanitized_data.replace(b"password", b"********")
+        self.sanitization_map.update(
+            {data.decode(): sanitized_data.decode()}
+        )  # Update map with decoded values
         return sanitized_data
 
     def get_sanitization_map(self) -> Dict[str, str]:
@@ -97,6 +99,40 @@ class PacketSanitizer:
         Returns a dictionary mapping original data to sanitized data.
 
         Returns:
-            Dict[str, str]: A dictionary where keys are original data segments and values are their sanitized counterparts.
+            Dict[str, str]: A dictionary where keys are original data segments and
+            values are their sanitized counterparts.
         """
         return self.sanitization_map
+
+    def main(self):
+        """Provides a command-line interface for the sanitizer."""
+        parser = argparse.ArgumentParser(
+            description="Sanitize network data.",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        parser.add_argument(
+            "data",
+            nargs="?",  # Make the 'data' argument optional
+            help="The network data to sanitize. If not provided, data will be read from standard input.",
+        )
+        args = parser.parse_args()
+
+        if args.data:
+            data = args.data
+        else:
+            print(
+                "Enter the network data you want to sanitize (press Ctrl+D to finish input):"
+            )
+            data = sys.stdin.read()
+
+        sanitized_data = self.sanitize(data)
+        if sanitized_data is not None:
+            print("Sanitized Data:")
+            print(sanitized_data)
+        else:
+            print("An error occurred during sanitization.")
+
+
+if __name__ == "__main__":
+    sanitizer = PacketSanitizer()
+    sanitizer.main()
