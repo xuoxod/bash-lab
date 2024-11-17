@@ -1,8 +1,8 @@
 import socket
-import threading
+import multiprocessing
 import queue
-import logging  # Import logging here
-import netifaces  # Import netifaces
+import logging
+import netifaces
 from networkexceptions import (
     SocketCreationError,
     SocketBindingError,
@@ -10,66 +10,97 @@ from networkexceptions import (
 )
 from defaultinterfacegetter import DefaultInterfaceGetter
 
+# For type hinting
+from multiprocessing import Queue, Event, Process, Lock
+from typing import Optional
+
 
 class PacketSniffer:
-    """
-    Captures raw network data from a specified interface.
-    """
 
-    def __init__(self, interface=None, buffer_size=65536, logger=None):
+    def __init__(  # updated code
+        self,
+        interface: Optional[str] = None,
+        buffer_size: int = 65536,
+        logger: Optional[logging.Logger] = None,
+        data_queue: Optional[Queue] = None,  # Accept queue as argument
+    ):
         self.interface = interface or DefaultInterfaceGetter.get_default_interface()
         self.buffer_size = buffer_size
-        self.stop_event = threading.Event()
-        self.data_queue = queue.Queue()  # Thread-safe queue for data transfer
-        self.processing_condition = threading.Condition()  # Add the condition here
-        self.logger = logger or logging.getLogger(__name__)
 
-    def _capture_loop(self):
-        """
-        Internal loop to capture raw data.
-        """
-        raw_socket = None  # Initialize raw_socket
+        if data_queue is not None:  # Use provided queue or create a new one
+            self.data_queue = data_queue
+        else:
+            self.data_queue: Queue = multiprocessing.Queue()
+
+        self.stop_event: Event = multiprocessing.Event()
+        self.capture_process: Optional[Process] = None
+        self.logger = logger or logging.getLogger(__name__)
+        self.lock = Lock()  # Use multiprocess Lock
+        self.processing_condition = multiprocessing.Condition()  # Condition variable
+
+    def _capture_loop(
+        self, data_queue: Queue, stop_event: Event
+    ):  # updated code, removed queue instantiation
         try:
-            # Create a raw socket
             raw_socket = socket.socket(
                 socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(0x0003)
             )
-            # Bind the socket to the specified interface
+
+            raw_socket.settimeout(1)  # timeout to check stop_event more frequently
             raw_socket.bind((self.interface, 0))
+            while not stop_event.is_set():
+                try:
+                    raw_data, _ = raw_socket.recvfrom(self.buffer_size)
+                    with self.processing_condition:
+                        data_queue.put(raw_data)  # Put data into the queue
+                        self.processing_condition.notify()  # Notify waiting threads
 
-            while not self.stop_event.is_set():
-                # Receive raw data
-                raw_data, _ = raw_socket.recvfrom(self.buffer_size)
-                with self.processing_condition:  # Acquire the condition
-                    self.data_queue.put(raw_data)  # Put data into the queue
-                    self.processing_condition.notify()  # Notify the condition
-
-        except socket.error as se:
-            self.logger.error(f"Socket error in _capture_loop: {se}")
-            raise SocketCreationError(f"Failed to create raw socket: {se}") from se
-        except SocketBindingError as sbe:
-            self.logger.error(f"Socket binding error in _capture_loop: {sbe}")
-            raise SocketBindingError(f"Failed to bind the raw socket: {sbe}") from sbe
-        except Exception as exc:
-            self.logger.error(f"Unexpected error in _capture_loop: {exc}")
-            raise Exception(f"General error in _capture_loop: {exc}") from exc
-        finally:
-            if raw_socket:
+                except socket.timeout:  # check stop_event
+                    pass  # Check stop_event on timeout
+                except (
+                    socket.error,
+                    OSError,  # Include OSError for potential socket issues
+                ) as se:
+                    self.logger.error(f"Socket error in _capture_loop: {se}")
+                    break  # Exit loop on socket error
+                except Exception as exc:  # check for unexpected errors
+                    self.logger.exception(f"Unexpected error in _capture_loop: {exc}")
+                    break
+        finally:  # ensure socket release
+            if "raw_socket" in locals() and raw_socket:
                 raw_socket.close()
 
+    def start_capture(self):  # updated code
+        if (
+            self.capture_process is None or not self.capture_process.is_alive()
+        ):  # Start only if the process is dead or None
+            self.capture_process = multiprocessing.Process(
+                target=self._capture_loop,
+                args=(self.data_queue, self.stop_event),  # Pass the queue and event
+                daemon=True,
+            )
+            self.capture_process.start()
+        else:  # the process has already been started
+            print("Capture is already started.")
+            self.logger.warning(
+                "Attempting to start capture when capture process is already active."
+            )
+
     def start_capture(self):
-        """
-        Starts the data capture thread.
-        """
-        self.thread = threading.Thread(target=self._capture_loop, daemon=True)
-        self.thread.start()
+        self.capture_process = multiprocessing.Process(
+            target=self._capture_loop,
+            args=(self.data_queue, self.stop_event),
+            daemon=True,  # Make process a daemon to exit with main process
+        )
+        self.capture_process.start()
 
     def stop_capture(self):
-        """
-        Stops the data capture thread.
-        """
-        self.stop_event.set()
-        if self.thread:
-            self.thread.join()
+        if self.capture_process:
+            self.stop_event.set()
+            self.capture_process.join(
+                timeout=2.0
+            )  # Timeout to avoid indefinite blocking
 
-    # Removed the get_data() method
+            if self.capture_process.is_alive():
+                self.logger.warning("Force-terminating capture process.")
+                self.capture_process.terminate()  # Terminate if still running
