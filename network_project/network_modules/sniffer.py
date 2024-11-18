@@ -1,3 +1,6 @@
+#!/usr/bin/python3
+
+
 import socket
 import multiprocessing
 import logging
@@ -90,7 +93,7 @@ class Sniffer:
                 self.logger.warning("Force-terminating capture process.")
                 self.capture_process.terminate()
 
-    def run(self, test_mode=False, save_csv=False, save_json=False):
+    def run_(self, test_mode=False, save_csv=False, save_json=False):
         self.start_capture()  # Start capturing packets in a separate process
 
         # --- Create and start the processing process ---
@@ -116,7 +119,69 @@ class Sniffer:
                 self.processing_process.join()  # Wait for the processing process to terminate
             self.logger.info("Sniffer stopped.")
 
-    def process_packets(self, save_csv, save_json):  # Takes args directly
+    def run(
+        self, test_mode=False, save_csv=False, save_json=False
+    ):  # Revised run method
+        self.start_capture()
+        self.processing_process = multiprocessing.Process(
+            target=self.process_packets,
+            args=(save_csv, save_json),
+            daemon=True,
+        )
+        self.processing_process.start()
+        self.logger.info("Packet processing started")
+
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("Stopping capture...")  # More informative message
+        finally:
+            self.stop()  # Call the new stop() method to handle shutdown
+
+    def run_1(self, test_mode=False, save_csv=False, save_json=False):  # Quick Stop
+        # ... (process start-up logic remains the same)
+
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("Stopping...")
+        finally:
+            self.stop(quick_stop=True)
+
+    def run_2(self, test_mode=False, save_csv=False, save_json=False):  # Detailed Stop
+        # ... (process start-up logic remains the same)
+
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("Stopping...")
+        finally:
+            self.stop(quick_stop=False)
+
+    def stop(self):  # New stop() method to centralize shutdown logic
+        self.logger.info("Sniffer stopping...")
+
+        self.stop_capture()  # Stop the capture process
+
+        with self.lock:  # Critical: acquire lock *before* putting sentinel
+            self.data_queue.put(self.sentinel)  # Signal end to process_packets
+
+        if self.processing_process and self.processing_process.is_alive():
+            self.processing_process.join(timeout=5.0)  # Give it time to stop
+            if self.processing_process.is_alive():  # Check again
+                self.logger.warning(
+                    "Processing process did not terminate. Forcing termination."
+                )
+                self.processing_process.terminate()  # Force if necessary
+            else:
+                self.logger.info("Processing process stopped gracefully.")
+
+        self.logger.info("Sniffer stopped.")
+
+    def process_packets_old(self, save_csv, save_json):  # Takes args directly
         """Processes captured packets from the queue."""
         while not self.stop_event.is_set():
             with self.processing_condition:  # Use the condition for waiting
@@ -158,6 +223,56 @@ class Sniffer:
                                 packet_data, "packet_data.json"
                             )
 
+                    except Exception as e:
+                        self.logger.error(f"Error processing packet: {e}")
+
+    def process_packets(self, save_csv, save_json):
+        """Processes captured packets from the queue."""
+        while not self.stop_event.is_set():  # Check stop event before acquiring lock
+            with self.processing_condition:
+                if not self.processing_condition.wait_for(
+                    lambda: not self.data_queue.empty() or self.stop_event.is_set(),
+                    timeout=1,
+                ):
+                    continue  # Check the stop event periodically
+
+                if self.stop_event.is_set():
+                    break  # Exit the loop immediately
+
+                if not self.data_queue.empty():  # Only process if queue not empty
+                    try:
+                        raw_packet = self.data_queue.get()
+                        packet = Ether(raw_packet)
+
+                        packet_data = self._extract_packet_data(packet)
+                        if packet_data is None:
+                            continue
+
+                        table = Table(title="Packet Details", show_lines=True)
+                        table.add_column("Layer", style="cyan", no_wrap=True)
+                        table.add_column("Field", style="green", no_wrap=True)
+                        table.add_column("Value", style="magenta")
+
+                        for layer_name, field_data in self._group_by_layer(
+                            packet_data
+                        ).items():
+                            for field_name, value in field_data.items():
+                                table.add_row(layer_name, field_name, str(value))
+
+                        print(Panel(table, title="Captured Packet"))
+
+                        if save_csv:
+                            self.packet_saver.save_packet_data(
+                                packet_data, "packet_data.csv"
+                            )
+                        if save_json:
+                            self.packet_saver.save_packet_data(
+                                packet_data, "packet_data.json"
+                            )
+                    except KeyboardInterrupt:
+                        self.logger.error(f"Keyboard Interrupt Error: {e}")
+                        print("Stopping...")  # Signal stop
+                        # self.stop()  # Stop sniffing method
                     except Exception as e:
                         self.logger.error(f"Error processing packet: {e}")
 
