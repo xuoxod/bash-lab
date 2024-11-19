@@ -22,3 +22,5 @@ btdisc*
 
 .env
 *.env
+
+.trunk
