@@ -43,7 +43,7 @@ class Utils:
         style: str = "default",
         justify: str = "left",
         width: Optional[int] = None,
-        as_table: bool = False,
+        as_table: bool = True,
         table_title: str = "Results",
     ) -> None:
 

@@ -1,11 +1,11 @@
+#!/usr/bin/python3
+
+
 import time
 import threading
 import subprocess
 from scapy.all import *
-
-from network_modules.helpers.colors import (
-    TextColors,
-)  # Assuming your existing colors module
+from textcolors import TextColors
 
 
 class TrafficInterceptor:
