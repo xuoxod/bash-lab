@@ -197,6 +197,18 @@ class Tool:
             except Exception as e:
                 logger.error(f"Error restoring ARP: {e}")
         else:
+            missing = []
+            if not self.target_ip:
+                missing.append("target_ip")
+            if not self._gateway_ip:
+                missing.append("_gateway_ip")
+            if not self.target_mac:
+                missing.append("target_mac")
+            if not self.gateway_mac:
+                missing.append("gateway_mac")
+            if not self._interface:
+                missing.append("_interface")
+
             logger.warning("Could not restore ARP table. Information missing.")
 
     def start_rerouting(self, target_ip):
@@ -253,6 +265,20 @@ class Tool:
             logger.info(
                 f"Started rerouting traffic for {target_ip}"
             )  # After starting all threads
+        except socket.timeout as e:  # Handle timeout error specifically
+            logger.error(
+                f"Timeout starting Scapy forwarding: {e}"
+            )  # Use a dedicated error message
+
+            # Cleanup (essential if the ARP threads did start)
+            with self.poison_threads_lock:  # Use lock for thread safety during cleanup
+                if self.poison_threads:
+                    self.stop_event.set()
+                    for thread in self.poison_threads:
+                        thread.join()
+                    self.poison_threads = []
+                self._restore_arp()  # Restore ARP if necessary
+            raise  # Re-raise or handle the timeout appropriately
 
         except Exception as e:
             # --- Exception Handling (Crucial for cleanup) ---
@@ -306,7 +332,9 @@ class Tool:
                 self.poison_threads = []  # Clear the list after stopping threads
                 self.stop_event.clear()  # Reset for next use
             else:
-                logger.warning("Rerouting was not active.")
+                logger.warning(
+                    "Rerouting stop attempted, but no threads were active. Was start_rerouting called successfully?"
+                )  #  More specific log message
 
         # Stop Scapy forwarding thread *outside* the lock:
         if (
