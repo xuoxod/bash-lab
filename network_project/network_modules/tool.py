@@ -8,6 +8,7 @@ import time  # For time.sleep()
 import errno  # For errno (used for error checking in threads)
 
 from scapy.all import *  #  Import all of Scapy
+from scapy.all import IP, Ether
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -327,7 +328,7 @@ class Tool:
                     not self.stop_event.is_set()
                 ):  # Exit gracefully if stop_rerouting is called
                     try:
-                        packet = fwd.recv(1024)  # Optimized receive size
+                        packet = fwd.recv(1024, timeout=1)  # Optimized receive size
                         if packet:
                             if IP in packet:
                                 # Simple forwarding (modify as needed based on how you want to handle packets):
