@@ -1,7 +1,6 @@
 #!/usr/bin/python3
 
 
-from typing import Text
 import scapy.all as scapy
 import netifaces
 import argparse
@@ -9,17 +8,10 @@ import subprocess
 import threading
 import time
 
-from prettyprint import PrettyPrint  # Import PrettyPrint
-from queue import Queue, Empty  # For thread-safe communication
-from rich.console import Console
-
 
 class Rerouter:
 
     def __init__(self, target_ip, interface=None, gateway_ip=None, verbose=True):
-        self.printer = PrettyPrint(title="Rerouter Status")  # Initialize PrettyPrint
-        self.update_queue = Queue()  # Create update queue
-        self.console = Console()  # Initialize Rich console
         self.target_ip = target_ip
         self.verbose = verbose
         self.bridge_name = "br0"
@@ -115,34 +107,9 @@ class Rerouter:
             self._print(f"Error getting MAC: {e}", color="red")
             return None
 
-    def _print(self, message, color="green"):  # Corrected and more robust _print()
+    def _print(self, msg, color="green"):
         if self.verbose:
-            try:
-                if isinstance(message, str):  # Check message type
-                    text = Text(message)  # Create Text object from string
-
-                    if color:  # Only apply style if a color string is supplied
-                        text.stylize(color)  # Apply style. Now safe.
-
-                    self.console.print(text)
-
-                elif isinstance(message, Text):  # If it's already a Text object
-                    if color:  # If a color is provided
-                        message.stylize(
-                            color
-                        )  # Directly apply style to the Text object
-
-                    self.console.print(message)
-
-                else:  # If message is not string or Text
-                    self.console.print(message)  # Let Rich handle non-string types.
-
-            except Exception as e:  # Handle unexpected errors in printing.
-                self.console.print(
-                    f"[bold red]Error in _print(): {e}[/]"
-                )  # Report error
-                if self.verbose:
-                    self.console.print_exception()  # Show full exception for debugging
+            print(f"[{color}]{msg}[/]")
 
     def _setup_bridge(self):
         """Creates and configures the bridge interface."""
@@ -261,175 +228,88 @@ class Rerouter:
             self._print(f"Error forwarding traffic: {e}", color="red")
 
     def start(self):
-
         try:
             self._setup_bridge()
 
-            table_setup_complete = threading.Condition()  # For thread signaling
-
-            self.pretty_print_thread = threading.Thread(
-                target=self._pretty_print_loop, daemon=True
-            )
-            self.pretty_print_thread.start()
-
-            self.forwarding_thread = threading.Thread(
-                target=self._forward_traffic, daemon=True
-            )
-            self.forwarding_thread.start()
-
-            self.printer.add_column(
-                "Field", style="cyan", no_wrap=True
-            )  # Ensure no_wrap is True for correct formatting
-            self.printer.add_column(
-                "Value", style="magenta", no_wrap=True
-            )  # Ensure no_wrap is True for correct formatting
-
-            self._add_table_row("Target IP", self.target_ip)
-            self._add_table_row("Target MAC", self.target_mac)
-            self._add_table_row("Gateway IP", self.gateway_ip)
-            self._add_table_row("Gateway MAC", self.gateway_mac)
-            self._add_table_row("Interface", self.interface_name)
-            self._add_table_row("Interface IP", self.interface_ip)
-            self._add_table_row("Interface MAC", self.interface_mac)
-            self._add_table_row("Bridge", self.bridge_name)
-            self._add_table_row("Status", "")  # Add "Status" row *before* updating it
-
-            with table_setup_complete:  # Signal initial table is setup
-                table_setup_complete.notify()  # Signal pretty print thread
-
-            self.update_queue.put(
-                ("update_cell", 8, 1, "[bold green]Rerouting...[/]")
-            )  # Update status *after* adding all rows
+            # Explicitly check if forwarding_thread was created before proceeding.
+            try:
+                self.forwarding_thread = threading.Thread(
+                    target=self._forward_traffic, daemon=True
+                )
+                self.forwarding_thread.start()
+                self._print("Forwarding thread started.", color="green")
+            except Exception as thread_error:
+                self._print(
+                    f"Error starting forwarding thread: {thread_error}", color="red"
+                )
+                raise  # Re-raise to trigger the outer except block and attempt cleanup
 
             self._print("Rerouting started.")
 
             while True:
                 if self.stop_event.is_set():
                     self.stop()
-                    break  # Exit loop after calling stop()
+                    return  # Exit after calling stop()
+
                 time.sleep(1)
 
-        except Exception as e:
-            # existing error handling, including calling self.stop() for cleanup
-            self._print(
-                f"Error starting rerouting: {str(e)}", color="red"
-            )  # Provide information about error
-            self.stop()  # Ensure cleanup even if starting failed
-
-    def _add_table_row(self, field, value):  # Helper to add rows from start().
-        self.update_queue.put(("add_row", field, value))
-
-    def _pretty_print_loop(self, setup_complete):
-        with setup_complete:
-            setup_complete.wait()  # Wait for table setup to complete in the main thread
-
-        self.printer.start()  # Start pretty print here
-        while True:  # Continue until sentinel value is encountered.
-            try:
-                item = self.update_queue.get(timeout=1)  # Timeout for responsiveness
-                if item is None:  # Check for sentinel value before unpacking.
-                    self._print(
-                        "Pretty print thread stopping...", color="yellow"
-                    )  # Informative output
-                    break  # Break the loop only on sentinel value
-
-                action, *args = item
-                if action == "add_row":
-                    self.printer.add_row(*args)  # Correct placement for add_row
-                elif action == "update_cell":
-                    self.printer.update_cell(*args)  # Thread-safe update
-                elif action == "barrier":
-                    args[0]()  # Execute barrier release
-
-            except Empty:  # Queue is empty
-                pass  # Do not stop thread, continue looping until sentinel value is received or another error occurs
-
-            except Exception as print_error:  # Handle unexpected printing errors.
-                self._print(
-                    f"[bold red]Error in pretty print loop: {print_error}[/]"
-                )  # Report error
-                if self.verbose:
-                    self.console.print_exception()
+        except (
+            Exception
+        ) as e:  # Handle any errors during startup, including forwarding thread issues.
+            self._print(f"Error starting rerouting: {str(e)}", color="red")
+            self.stop()  # Attempt cleanup even if starting failed.
 
     def stop(self):
-        self._print("Stopping rerouting...", color="yellow")  # Console message.
-        self._update_status("[bold yellow]Stopping...[/]")  # PrettyPrint update.
-        self.stop_event.set()  # Signal other threads to stop.
+        self._print("Stopping rerouting...")
+        self.stop_event.set()
 
-        threads_to_join = []
-        if hasattr(self, "forwarding_thread") and self.forwarding_thread.is_alive():
-            threads_to_join.append(self.forwarding_thread)
-
-        if (
-            hasattr(self, "pretty_print_thread") and self.pretty_print_thread.is_alive()
-        ):  # Join the pretty print thread first
-            threads_to_join.append(self.pretty_print_thread)
-
-        for thread in threads_to_join:
-            thread_name = thread.name
+        if hasattr(
+            self, "forwarding_thread"
+        ):  # Only try to join if forwarding thread has been started
             try:
-                thread.join(timeout=2.0)  # Use timeout
-
-                if thread.is_alive():  # Informative messages about thread status
+                self.forwarding_thread.join(timeout=2.0)
+                if self.forwarding_thread.is_alive():
                     self._print(
-                        f"{thread_name} did not exit within timeout.", color="yellow"
+                        "Forwarding thread did not exit within timeout.", color="yellow"
                     )
-
                 else:
-                    self._print(f"{thread_name} exited normally.", color="green")
+                    self._print(
+                        f"Forwarding thread exited normally: {self.forwarding_thread.name}",
+                        color="green",
+                    )  # Show thread name
 
-            except Exception as join_error:  # Handle any exceptions during join.
-                self._print(f"Error joining {thread_name}: {join_error}", color="red")
-
-        self.printer.stop()  # Stop pretty printing and print final version of the table
+            except Exception as removal_error:
+                self._print(
+                    f"Error joining forwarding thread: {str(removal_error)}",
+                    color="red",
+                )  # Print specific exception
 
         try:
             self._remove_bridge()
-        except Exception as e:
-            self._print(f"Error removing bridge: {str(e)}", color="red")
+        except Exception as removal_error:
+            self._print(
+                f"Encountered an issue removing the bridge: {str(removal_error)}\n",
+                color="red",
+            )
 
-        try:  # Restore interface
+        # After attempting bridge removal try and bring the interface back up.
+        try:
             subprocess.run(
                 ["ip", "link", "set", self.interface_name, "up"],
                 check=True,
                 capture_output=True,
                 text=True,
-            )
-            self._print(f"Interface {self.interface_name} set up.", color="green")
-
-        except (
-            subprocess.SubprocessError
-        ) as iface_error:  # Handle any subprocess errors.
+            )  # Bring interface back up
+            self._print(f"Interface {self.interface_name} set to up.", color="green")
+        except subprocess.SubprocessError as iface_error:
             self._print(
-                f"Error setting up interface {self.interface_name}: {str(iface_error)}",
+                f"Error setting up interface {self.interface_name} during stop(): {str(iface_error)}",
                 color="red",
             )
             if self.verbose:
-                self.console.print_exception()  # Show full error if verbose is enabled
+                self.console.print_exception()  # Print exception if verbose is enabled.
 
-        self._update_status("[bold red]Stopped[/]")  # Final status update to the table
-
-        self._print("Rerouting stopped.", color="green")
-
-    def _update_status(self, status):
-        """Dynamically determines the 'Status' row index for updating."""
-
-        # Find the index of the "Status" row
-        status_row_index = None
-        for i, row in enumerate(self.printer.table.rows):
-            if str(row.header) == "Status":  # Find "Status" row.
-                status_row_index = i
-                break
-
-        if status_row_index is not None:
-            self.update_queue.put(
-                ("update_cell", status_row_index, 1, status)
-            )  # Correct usage of update_queue
-
-        else:  # If the "Status" row is somehow not in the table.
-            self.console.print(
-                "[bold yellow]Warning: 'Status' row not found in PrettyPrint table/]"
-            )
+        self._print("Rerouting stopped.")
 
 
 if __name__ == "__main__":
