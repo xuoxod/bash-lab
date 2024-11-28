@@ -29,8 +29,15 @@ log = logging.getLogger("rich")
 def main():
 
     parser = argparse.ArgumentParser(
-        description="Network Tool Interface",
-        epilog="Example: python run.py -t 192.168.1.105 -sf",  # Example in epilog
+        description="Custom Librarys Interface",
+        epilog="""
+        Examples:
+            Display network info (default): ./run.py 
+            Reroute traffic using sysctl:  ./run.py -t 192.168.1.105
+            Reroute traffic using Scapy:   ./run.py -t 192.168.1.105 -sf
+            Specify interface:            ./run.py -i eth0 -t 192.168.1.105 -sf  
+            Display network info only:   ./run.py --netinfo
+        """,  # Multi-line epilog with enhanced examples
         formatter_class=argparse.RawDescriptionHelpFormatter,  # Preserve formatting
     )
 
