@@ -125,19 +125,41 @@ def main():
                 )  # Informative error message
                 sys.exit(1)
             else:  # Display the information if available.
-
-                netinfo_table = Table(
-                    title="Network Information", style="bold cyan"
-                )  # Rich table
+                netinfo_table = Table(title="Network Information", style="bold cyan")
                 netinfo_table.add_column(
-                    "Property", style="bold white"
-                )  # Style columns
+                    "Property", style="bold white", justify="right"
+                )  # Right-align properties
                 netinfo_table.add_column("Value", style="green")
 
-                netinfo_table.add_row("Interface", tool.get_interface())  # Rich table
-                netinfo_table.add_row("Gateway IP", tool.get_gateway_ip())
-                netinfo_table.add_row("Your IP", tool.get_own_ip())
-                netinfo_table.add_row("Your MAC", tool.get_own_mac())
+                # Use Text and Style for finer color control:
+
+                styles = [  # List of styles (at least 8, easily extendable)
+                    Style(color="bright_blue"),
+                    Style(color="yellow"),  # Added colors
+                    Style(color="magenta"),
+                    Style(color="bright_green"),
+                    Style(color="bright_cyan"),
+                    Style(color="red"),
+                    Style(color="bright_magenta"),
+                    Style(color="bright_yellow"),
+                ]
+
+                netinfo_table.add_row(
+                    Text("Interface:", style=styles[0]),
+                    Text(tool.get_interface(), style=styles[1]),
+                )
+                netinfo_table.add_row(
+                    Text("Gateway IP:", style=styles[2]),
+                    Text(tool.get_gateway_ip(), style=styles[3]),
+                )
+                netinfo_table.add_row(
+                    Text("Your IP:", style=styles[4]),
+                    Text(tool.get_own_ip(), style=styles[5]),
+                )
+                netinfo_table.add_row(
+                    Text("Your MAC:", style=styles[6]),
+                    Text(tool.get_own_mac(), style=styles[7]),
+                )
 
                 console.print(Panel.fit(netinfo_table))
 
