@@ -411,9 +411,12 @@ class Tool:
     def _scapy_forwarding_loop(self, target_ip, target_mac, gateway_ip, gateway_mac):
         try:
             with conf.L3socket() as fwd:
+
                 while not self.stop_event.is_set():
                     try:
+
                         packet = fwd.recv(1024, timeout=1)
+
                         if packet and IP in packet:
 
                             if packet[IP].dst == target_ip:  # Use the local copy
@@ -431,6 +434,7 @@ class Tool:
                                 self.process_packet(
                                     packet.copy()
                                 )  # Enqueue packet for later processing.
+
                             except OSError as e:
                                 logger.error(
                                     f"Error sending packet in forwarding loop: {e}"
@@ -445,13 +449,12 @@ class Tool:
             logger.exception(f"Error creating Scapy forwarding socket: {e}")
 
     def process_packet(self, packet):
-        """Processes a captured packet (stores in queue)."""
+        """Processes a captured packet and forwards it appropriately."""
 
         if not packet:
             return  # Handle potential None packet
 
         try:
-
             if IP in packet:
                 if self.use_scapy_forwarding or (
                     not self.forwarding_thread or not self.forwarding_thread.is_alive()
@@ -461,25 +464,29 @@ class Tool:
 
                     if packet[IP].dst == self.target_ip:
                         packet[Ether].dst = self.target_mac
+                        logger.debug("Redirecting to target MAC")
                     elif packet[IP].src == self.target_ip:
                         packet[Ether].dst = self.gateway_mac
+                        logger.debug("Redirecting to gateway MAC")
 
                     elif not self.use_scapy_forwarding:  # Using sysctl, not scapy
+                        logger.debug(
+                            f"Skipping processing for non-target related packet: {packet.summary()}"
+                        )
                         return  # Let the system handle unrelated traffic
 
-                    elif self.use_scapy_forwarding:  # Only for scapy
-
+                    elif self.use_scapy_forwarding:  # Scapy handles all forwarding
                         if packet[IP].src == self._gateway_ip:
                             packet[Ether].dst = self.target_mac
-
+                            logger.debug("Redirecting to target MAC")  # Log MAC change
                         elif packet[IP].dst == self._gateway_ip:
                             packet[Ether].dst = self.gateway_mac
+                            logger.debug("Redirecting to gateway MAC")  # Log MAC change
 
                     try:
                         sendp(
                             packet, verbose=0, iface=self._interface
-                        )  # Use explicit interface
-
+                        )  # Send the packet
                     except OSError as e:
                         logger.error(f"Error sending packet: {e}")
 
@@ -490,17 +497,17 @@ class Tool:
 
             else:  # Handle non-IP packets
                 logger.debug(f"Non-IP packet received: {packet.summary()}")
-                if (
-                    self.use_scapy_forwarding
-                ):  # Forward non-ip traffic only when explicitly enabled
-
+                if self.use_scapy_forwarding:
                     try:
                         sendp(packet, verbose=0, iface=self._interface)
-
-                        with self.packet_queue_lock:  # Correct:  Protect queue access
-                            self.packet_queue.put(packet.copy())
                     except OSError as e:
                         logger.error(f"Error sending packet: {e}")
+
+            with self.packet_queue_lock:  # <--- CRITICAL: Protect queue access
+                self.packet_queue.put(
+                    packet.copy()
+                )  # Put packet in queue (thread-safe)
+                logger.debug("Packet added to queue")
 
         except Exception as e:
             logger.exception(f"Error processing packet: {e}")
