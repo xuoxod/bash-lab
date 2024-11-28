@@ -87,20 +87,23 @@ def main():
 
         if args.target:  # Rerouting mode
             try:
-                tool.start_rerouting(args.target)  # Start rerouting
+                tool.start_rerouting(args.target, console)  # Start rerouting
                 console.print(
                     f"[bold green]Traffic rerouting started for target: {args.target}[/]"
                 )
+
                 try:
-                    while (
-                        True
-                    ):  # Keep the main thread alive (can add interactive commands here later)
+                    while not tool.stop_event.is_set():
+                        # <--- Use stop_event here. Line 94 (approx.)
                         time.sleep(1)
 
                 except KeyboardInterrupt:  # Exit gracefully on Ctrl+C
                     print("\nStopping rerouting...")  # Indicate rerouting is stopping
 
+                    tool.stop_event.set()
                     tool.stop_rerouting()
+                    # <--- Call this to clean up resources (but *after* setting stop_event).
+
                     console.print(
                         "[bold green]Traffic rerouting stopped and ARP table restored.[/]"
                     )  # Positive message
