@@ -433,7 +433,7 @@ class Tool:
                 self.forwarding_thread = None  # Set to None *after* joining
                 logger.info("Stopped Scapy forwarding thread.")
 
-    def stop_rerouting_(self):
+    def stop_rerouting_old(self):
 
         with self.poison_threads_lock:  # Must acquire the lock when potentially accessing self.poison_threads
             if self.poison_threads:  # Check if the threads were ever started.
