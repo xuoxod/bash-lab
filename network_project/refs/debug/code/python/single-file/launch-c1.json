@@ -1,0 +1,17 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug run.py",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "run", // Specify run.py as the module to debug
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "-t",
+                "192.168.1.158"
+            ]
+        }
+    ]
+}

@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Attach to sudo run.py",
+            "type": "debugpy",
+            "request": "attach",  // Change to "attach"
+            "connect": {
+                "host": "localhost",
+                "port": 5678 // Match the port above
+            }
+        }
+    ]
+}

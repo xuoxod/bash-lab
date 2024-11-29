@@ -9,7 +9,7 @@ import errno  # For errno (used for error checking in threads)
 import queue
 
 from scapy.all import *  #  Import all of Scapy
-from scapy.all import IP, Ether
+from scapy.all import IP, Ether, ARP
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -308,26 +308,19 @@ class Tool:
             logger.info(f"Started rerouting traffic for {target_ip}")
 
             # --- Main Loop for Processing Packets from the Queue ---
-            while not self.stop_event.is_set():  # Loop until stop event is set
-                try:
-                    packet = self.packet_queue.get(timeout=1)  # Get with timeout
-                    self.packet_queue.task_done()  # Indicate task completion
+            while True:  # <---  Crucial: Change to an uninterruptible loop
+                if self.stop_event.is_set():
+                    break  # <--- Correct place for this break
+                time.sleep(
+                    1
+                )  # Or do other regular checking in tool.py or other tool related operations.
 
-                    if (
-                        packet
-                    ):  # Handle shutdown condition by returning None if queue is empty
-                        summary = packet.summary()
-                        self.console.print(f"Processed: {summary}")
+        except (
+            KeyboardInterrupt
+        ):  # Catch directly in start_rerouting.  Stop Poisoning, Restore ARP.
+            print("\nStopping rerouting...")  # <--- Or use console.print, your choice.
 
-                except queue.Empty:  # Handle queue timeout
-                    pass  # Do nothing on queue.Empty.  Loop continues or breaks when stop_event is set.
-
-        except KeyboardInterrupt:  # Handle Ctrl+C
-            print("\nStopping rerouting...")  # Indicate rerouting stopping
-            self.stop_rerouting()
-            self.console.print(
-                "[bold green]Traffic rerouting stopped and ARP table restored.[/]"
-            )
+            self.stop_rerouting()  # Call cleanup and print final message.
 
         except Exception as e:
             with self.poison_threads_lock:  # MUST acquire the lock during exception handling and cleanup
@@ -401,11 +394,18 @@ class Tool:
                 self.poison_threads = []
 
             self._restore_arp()
+
             if not self.use_scapy_forwarding:
                 subprocess.run(
                     ["sysctl", "-w", "net.ipv4.ip_forward=0"], check=True
                 )  # Disable IP forwarding
+
             logger.info("Traffic rerouting stopped and ARP table restored.")
+
+            self.console.print(
+                "[bold green]Traffic rerouting stopped and ARP table restored.[/]"
+            )  # Positive message
+            sys.exit(0)  # <--- Indicate to user success
 
         if self.use_scapy_forwarding:  # Ensure this check is still in place
             if (
