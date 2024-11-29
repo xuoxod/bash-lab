@@ -22,23 +22,34 @@ logging.basicConfig(
     level="INFO",
     format="%(message)s",
     datefmt="[%X]",
-    handlers=[RichHandler(rich_tracebacks=True)],  # Rich traceback formatting
+    handlers=[RichHandler(rich_tracebacks=True)],
 )
 
 log = logging.getLogger("rich")
 
 
 def main():
+    console = Console()
+
+    # Rich-formatted description (Markdown)
+    description_md = """
+    # Network Tool Interface
+
+    This script provides a console interface for the `Tool` class, allowing you to interact with various network functionalities. You can display network information, send custom information packets, or perform traffic rerouting.
+    """
+    console.print(Markdown(description_md))
 
     parser = argparse.ArgumentParser(
-        description="Custom Librarys Interface",
+        description="Network Tool Interface",
         epilog="""
         Examples:
             Display network info (default): ./run.py 
-            Reroute traffic using sysctl:  ./run.py -t 192.168.1.105
-            Reroute traffic using Scapy:   ./run.py -t 192.168.1.105 -sf
-            Specify interface:            ./run.py -i eth0 -t 192.168.1.105 -sf  
-            Display network info only:   ./run.py --netinfo
+            Send info packet (UDP):        ./run.py -sip 192.168.1.105
+            Send info packet (raw IP):     ./run.py -sip 192.168.1.105 --raw
+            Reroute traffic (sysctl):     ./run.py -t 192.168.1.105
+            Reroute traffic (Scapy):      ./run.py -t 192.168.1.105 -sf
+            Specify interface:           ./run.py -i eth0 -t 192.168.1.105 -sf
+            Display network info only:    ./run.py --netinfo
         """,  # Multi-line epilog with enhanced examples
         formatter_class=argparse.RawDescriptionHelpFormatter,  # Preserve formatting
     )
@@ -47,82 +58,56 @@ def main():
         "-i", "--interface", help="Specify the network interface (e.g., eth0, wlan0)"
     )
 
-    group = parser.add_mutually_exclusive_group()  # Mutually exclusive reroute/info
+    group = parser.add_mutually_exclusive_group()  # Mutually exclusive options
 
     group.add_argument(
         "-t",
-        "--target",
+        "--target",  # For traffic rerouting
         metavar="TARGET_IP",
         help="Target IP address for traffic rerouting",
     )
     group.add_argument(
-        "-ni", "--netinfo", action="store_true", help="Display network information"
+        "-sip",
+        "--send-info-packet",  # For sending info packets
+        metavar="DEST_IP",
+        help="Destination IP address for sending information packet",
     )
+    group.add_argument(
+        "-ni", "--netinfo", action="store_true", help="Display network information only"
+    )  # Explicitly for network info
 
     parser.add_argument(
         "-sf",
         "--scapyforwarding",
         action="store_true",
         help="Use Scapy for IP forwarding (default: sysctl)",
-    )  # Forwarding option
-
-    console = Console()
-
-    # Rich-formatted description (Markdown)
-    description_md = """
-    # Network Tool Interface
-
-    This script provides a console interface for the `Tool` class, allowing you to interact with network functionalities.  You can either display network information or perform traffic rerouting to a specified target IP.
-    """
-    console.print(Markdown(description_md))
+    )
+    parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="Send information packet using raw IP (default: UDP)",
+    )
 
     args = parser.parse_args()
 
     try:
+        tool = Tool(interface=args.interface, greet=True)
 
-        tool = Tool(
-            interface=args.interface,
-            greet=True,
-            use_scapy_forwarding=args.scapyforwarding,
-        )  # Initialize your Tool
+        if args.target:  # Traffic rerouting mode (add actual logic here)
+            console.print("[yellow]Traffic rerouting is not yet implemented.[/]")
+            # ... (Add your traffic rerouting code here using the 'tool' object)
+            sys.exit(1)  # Temporary exit for now
 
-        if args.target:  # Rerouting mode
-            try:
-                tool.start_rerouting(args.target, console)  # Start rerouting
-
-                console.print(
-                    f"[bold green]Traffic rerouting started for target: {args.target}[/]"
-                )
-
-                while not tool.stop_event.is_set():
-                    try:
-                        with tool.status_queue_lock:
-                            status = tool.status_queue.get_nowait()
-                        console.print(status)  # Print the status.
-                    except Empty:
-                        pass  # Don't worry if there are no messages yet.
-                    time.sleep(1)
-
-            except (
-                ValueError
-            ) as e:  # Handle MAC address resolution failure specifically
-
-                console.print(f"[bold red]Error: {e}[/]")
-                sys.exit(1)  # Indicate an error to the user
-
-            except (
-                Exception
-            ) as e:  # Log or print other unexpected exceptions during rerouting
-
-                console.print(
-                    f"[bold red]Error during rerouting: {e}[/]"
-                )  # Rich error message
-                sys.exit(1)  # Non-zero exit code indicates error
+        elif args.send_info_packet:  # Send info packet mode
+            tool.send_info_packet(args.send_info_packet, use_udp=not args.raw)
+            console.print(
+                f"[bold green]Information packet sent to: {args.send_info_packet}[/]"
+            )
+            tool.pretty_print_replies()  # Process any replies
 
         elif args.netinfo or (
-            not args.netinfo and not args.target
-        ):  # Network info mode (default)
-
+            not any([args.target, args.send_info_packet, args.netinfo])
+        ):  # Network info mode (default or explicit)
             # ... existing Network Info display logic
 
             if not tool.is_network_info_available():
