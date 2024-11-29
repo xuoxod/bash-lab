@@ -15,6 +15,7 @@ from rich.table import Table
 from rich.panel import Panel
 from textcolors import TextColors
 from queue import Queue, Empty
+from networkexceptions import *
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -47,7 +48,7 @@ class Tool:
         ):  # Greet only if initialization was successful
             self.greet_user()
 
-    def initialize(self):
+    def initialize_(self):
         """Retrieves and stores network information."""
         try:
             self._interface = self._get_default_interface()
@@ -81,6 +82,36 @@ class Tool:
             self._gateway_ip = None
             self._own_ip = None
             self._own_mac = None
+
+    def initialize(self):
+        """Retrieves and stores network information."""
+        try:
+            self._interface = self._get_default_interface()
+            if self._interface is None:
+                raise DefaultInterfaceNotFoundError()  # More specific
+
+            self._gateway_ip = self._get_default_gateway()
+            self._own_ip = self._get_own_ip()
+            self._own_mac = self._get_own_mac()
+
+            # Check for None values and raise specific exceptions:
+            if self._gateway_ip is None:
+                raise GatewayNotFoundError()
+            if self._own_ip is None:
+                raise OwnIPNotFoundError()
+            if self._own_mac is None:
+                raise OwnMACNotFoundError()
+
+        except (
+            KeyError,
+            IndexError,
+            ValueError,
+        ) as e:
+            raise InterfaceConfigurationError(
+                f"Error configuring interface: {e}"
+            ) from e  # More specific
+        except OSError as e:
+            raise InterfaceError(f"OSError during initialization: {e}") from e
 
     def greet_user(self):
         """Presents a colorful greeting to the user, including network info."""
@@ -168,7 +199,7 @@ class Tool:
                 return None
         except Exception as e:
             logger.error(f"Error getting MAC address: {e}")
-            return None
+            raise AddressResolutionError(ip_address) from e  # Raise custom exception
 
     def _restore_arp(self):
         if (
@@ -204,6 +235,7 @@ class Tool:
                 logger.info("ARP table restored.")
             except Exception as e:
                 logger.error(f"Error restoring ARP: {e}")
+                raise ARPRestorationError() from e  # Chain the exception
         else:
             missing = []
             if not self.target_ip:
@@ -220,71 +252,64 @@ class Tool:
             logger.warning("Could not restore ARP table. Information missing.")
 
     def process_packet(self, packet):
-        """Processes a captured packet and forwards it appropriately."""
+        """Processes a captured packet."""
 
-        if not packet:
-            return  # Handle potential None packet
+        def _process(packet):  # Internal packet processing function
+            try:
+                if IP in packet:
+                    if packet[IP].dst == self.target_ip:
+                        packet[Ether].dst = self.target_mac
 
-        try:
-            if IP in packet:
-                if packet[IP].dst == self.target_ip:
-                    packet[Ether].dst = self.target_mac
+                    elif packet[IP].src == self.target_ip:
+                        packet[Ether].dst = self.gateway_mac
 
-                elif packet[IP].src == self.target_ip:
-                    packet[Ether].dst = self.gateway_mac
+                    elif packet[IP].src == self._gateway_ip:
+                        # Handle reverse traffic from gateway to target
+                        packet[Ether].dst = self.target_mac
 
-                elif packet[IP].src == self._gateway_ip:
-                    # Handle reverse traffic from gateway to target
-                    packet[Ether].dst = self.target_mac
+                    elif packet[IP].dst == self._gateway_ip:
+                        packet[Ether].dst = self.gateway_mac
 
-                elif packet[IP].dst == self._gateway_ip:
-                    packet[Ether].dst = self.gateway_mac
+                    else:
+                        # Packet not related to target or gateway
+                        packet.show()
+                        sendp(packet, verbose=0, iface=self._interface)
 
-                else:
-                    # Packet not related to target or gateway. Handle as needed. For instance, allow non-target traffic to flow by forwarding packet via sendp.
+                    with self.packet_queue_lock:
+                        try:
+                            self.packet_queue.put_nowait(packet.copy())
+                        except queue.Full:
+                            logger.warning("Packet queue full. Dropping packet.")
 
-                    packet.show()
-                    sendp(packet, verbose=0, iface=self._interface)
+                    if self.use_scapy_forwarding:
+                        sendp(packet, verbose=0, iface=self._interface)
+                    else:  # System forwarding is active
+                        logger.debug(
+                            "System IP forwarding active; skipping Scapy processing."
+                        )
 
-                with self.packet_queue_lock:  # <---  This remains unchanged
+                else:  # Handle non-IP packets
+                    logger.debug(f"Non-IP packet received: {packet.summary()}")
+                    if self.use_scapy_forwarding:
+                        try:
+                            sendp(packet, verbose=0, iface=self._interface)
+                        except OSError as e:
+                            logger.error(f"Error sending packet: {e}")
+
+                with self.packet_queue_lock:
                     try:
                         self.packet_queue.put_nowait(packet.copy())
+                        logger.info("Packet added to queue")
                     except queue.Full:
-                        logger.warning("Packet queue full. Dropping packet.")
+                        logger.warning("Packet queue is full. Dropping packet.")
+                        raise PacketQueueFullError("Packet queue is full.")
 
-                if self.use_scapy_forwarding:
-                    # Only send the packet if using Scapy for forwarding. If using sysctl, let system forwarding handle the packet.
+            except Exception as e:
+                logger.exception(f"Error processing packet: {e}")
+                raise PacketProcessingError from e  # Reraise PacketProcessingError
 
-                    sendp(packet, verbose=0, iface=self._interface)
-
-                else:  # System forwarding is active
-                    logger.debug(
-                        "System IP forwarding active; skipping Scapy processing."
-                    )
-
-            else:  # Handle non-IP packets
-                logger.debug(f"Non-IP packet received: {packet.summary()}")
-                if self.use_scapy_forwarding:
-                    try:
-                        sendp(packet, verbose=0, iface=self._interface)
-                    except OSError as e:
-                        logger.error(f"Error sending packet: {e}")
-
-            with self.packet_queue_lock:  # <--- CRITICAL: Protect queue access
-                # self.packet_queue.put(
-                #     packet.copy()
-                # )  # Put packet in queue (thread-safe)
-                try:
-                    # self.packet_queue.put_nowait(packet.copy())  # Non-blocking put
-
-                    self.packet_queue.put_nowait(packet.copy())  # <--- Already correct
-
-                    logger.info("Packet added to queue")
-                except queue.Full:
-                    self.logger.warning("Packet queue is full. Dropping packet.")
-
-        except Exception as e:
-            logger.exception(f"Error processing packet: {e}")
+        if packet:  # Only process if packet is not None
+            _process(packet)  # Process the individual packet directly
 
     def get_packet_from_queue(
         self, block=True, timeout=None
@@ -306,6 +331,22 @@ class Tool:
             except Empty:
 
                 return None
+
+    #       Sniffer logic
+    #######
+
+    def start_sniffer(self):  # Correct indentation
+        """Starts the asynchronous sniffer."""
+        if not hasattr(self, "sniffer") or not self.sniffer.running:
+            self.sniffer = AsyncSniffer(
+                prn=self.process_packet, store=False, iface=self._interface
+            )
+            self.sniffer.start()
+
+    def stop_sniffer(self):  # Correct indentation
+        """Stops the asynchronous sniffer."""
+        if hasattr(self, "sniffer") and self.sniffer.running:
+            self.sniffer.stop()
 
     #       Packet logic
     #######
@@ -360,6 +401,8 @@ class Tool:
         send_thread.start()
 
     def send_and_receive(self, packet):
+        """Sends a packet and receives a reply."""
+
         try:
             replies = sr1(packet, timeout=2, verbose=0, iface=self._interface)
             if replies:
@@ -367,20 +410,16 @@ class Tool:
                     self.reply_queue.put(replies)
         except OSError as e:
             if e.errno == errno.EPERM:
-                self.console.print(
-                    f"{TextColors.FAIL}Error sending packet. Please run as root (sudo) to send raw packets or use UDP.{TextColors.ENDC}",
-                    style="bold red",
-                )
+                raise PacketSendError(
+                    f"Permission denied when sending packet: {e}"
+                )  # Raise only
             else:
-                self.console.print(
-                    f"{TextColors.FAIL}OSError sending packet: {e}{TextColors.ENDC}",
-                    style="bold red",
-                )
+                raise PacketSendError(
+                    f"OSError sending packet: {e}"
+                ) from e  # Raise only
+
         except Exception as e:
-            self.console.print(
-                f"{TextColors.FAIL}Error sending or receiving packet: {e}{TextColors.ENDC}",
-                style="bold red",
-            )
+            raise PacketReceiveError from e  # Raise only
 
     def pretty_print_replies(self):
         """Prints replies from the reply queue."""

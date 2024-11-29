@@ -14,8 +14,17 @@ from rich.panel import Panel
 from rich.text import Text
 from rich.style import Style
 from rich.logging import RichHandler
-
 from tool import Tool  # Import your Tool class
+from networkexceptions import (
+    PacketReceiveError,
+    PacketSendError,
+    AddressResolutionError,
+    DefaultInterfaceNotFoundError,
+    InterfaceConfigurationError,
+    NetworkError,
+    PacketProcessingError,
+)
+
 
 # Configure Rich logging
 logging.basicConfig(
@@ -60,66 +69,91 @@ def main():
 
     group = parser.add_mutually_exclusive_group()  # Mutually exclusive options
 
+    # target argument -t or --target
+    # metavar: "TARGET_IP"
     group.add_argument(
         "-t",
         "--target",  # For traffic rerouting
         metavar="TARGET_IP",
         help="Target IP address for traffic rerouting",
     )
+
+    # send custom info packet -sip or --send-info-packet
+    # metavar: "DEST_IP"
     group.add_argument(
         "-sip",
         "--send-info-packet",  # For sending info packets
         metavar="DEST_IP",
         help="Destination IP address for sending information packet",
     )
+
+    # netinfo argument -ni or --netinfo
+    # action: store_true
     group.add_argument(
         "-ni", "--netinfo", action="store_true", help="Display network information only"
     )  # Explicitly for network info
 
+    # scapyforwarding argument -sf or --scapyforwarding
+    # action: store_true
     parser.add_argument(
         "-sf",
         "--scapyforwarding",
         action="store_true",
         help="Use Scapy for IP forwarding (default: sysctl)",
     )
+
+    # raw argument -r or --raw
+    # action: store_true
     parser.add_argument(
         "--raw",
         action="store_true",
         help="Send information packet using raw IP (default: UDP)",
     )
 
+    # Parse arguments
     args = parser.parse_args()
 
+    # try block:
     try:
         tool = Tool(interface=args.interface, greet=True)
 
         if args.target:  # Traffic rerouting mode (add actual logic here)
             console.print("[yellow]Traffic rerouting is not yet implemented.[/]")
             # ... (Add your traffic rerouting code here using the 'tool' object)
-            sys.exit(1)  # Temporary exit for now
 
         elif args.send_info_packet:  # Send info packet mode
-            tool.send_info_packet(args.send_info_packet, use_udp=not args.raw)
-            console.print(
-                f"[bold green]Information packet sent to: {args.send_info_packet}[/]"
-            )
-            tool.pretty_print_replies()  # Process any replies
+            try:
+                tool.send_info_packet(args.send_info_packet, use_udp=not args.raw)
+                console.print(
+                    f"[bold green]Information packet sent to: {args.send_info_packet}[/]"
+                )
+                tool.pretty_print_replies()  # Process any replies
+            except (
+                PacketSendError,
+                PacketReceiveError,
+                AddressResolutionError,
+                PacketProcessingError,
+            ) as e:  # Handles from tool
+                console.print(f"[bold red]{e}[/]")
+                sys.exit(1)
 
         elif args.netinfo or (
             not any([args.target, args.send_info_packet, args.netinfo])
-        ):  # Network info mode (default or explicit)
-            # ... existing Network Info display logic
-
+        ):
             if not tool.is_network_info_available():
                 console.print(
                     "[bold red]Network information not available. Check your interface or run initialization.[/]"
                 )  # Informative error message
                 sys.exit(1)
-            else:  # Display the information if available.
+
+            else:
+                # Display the information if available.
                 netinfo_table = Table(title="Network Information", style="bold cyan")
+
                 netinfo_table.add_column(
                     "Property", style="bold white", justify="right"
                 )  # Right-align properties
+
                 netinfo_table.add_column("Value", style="green")
 
                 # Use Text and Style for finer color control:
@@ -154,9 +188,23 @@ def main():
 
                 console.print(Panel.fit(netinfo_table))
 
-    except Exception as e:  # Catch any other unexpected exceptions
-        console.print_exception()
+    except (DefaultInterfaceNotFoundError, InterfaceConfigurationError) as dinfe:
+        console.print(
+            f"[bold red]Interface Error: {dinfe}[/]\n\n"
+        )  # Specific interface errors
         sys.exit(1)
+
+    except NetworkError as ne:  # Catch any other NetworkError
+        console.print(f"[bold red]Network Error: {ne}[/]\n\n")
+        sys.exit(1)
+
+    except (
+        Exception
+    ) as e:  # Catch any other unexpected exceptions (non-network related)
+        console.print_exception(f"General exception: {e}\n")
+        sys.exit(1)
+
+    sys.exit(0)
 
 
 if __name__ == "__main__":
