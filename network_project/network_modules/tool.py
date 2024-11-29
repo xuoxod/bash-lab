@@ -119,13 +119,18 @@ class Tool:
     def greet_user(self):
         """Presents a colorful greeting to the user, including network info."""
         username = getpass.getuser()
-        greeting_table = Table(title=f"Welcome, {username}!", style="bold cyan")
-        greeting_table.add_row("Network Tool Initialized")
+        greeting_table = Table(title=f"Welcome, {username}!", style="bold white")
+        greeting_table.add_column(
+            "Quick Summary", style="bold magenta", justify="center"
+        )
+        greeting_table.add_row("Network Tool Initialized", style="bold green")
         greeting_table.add_row(
-            f"Interface: {self._interface or 'N/A'}"
+            f"Interface: {self._interface or 'N/A'}", style="bold yellow"
         )  # Shows N/A if not available
-        greeting_table.add_row(f"Gateway IP: {self._gateway_ip or 'N/A'}")
-        greeting_table.add_row(f"Own IP: {self._own_ip or 'N/A'}")
+        greeting_table.add_row(
+            f"Gateway IP: {self._gateway_ip or 'N/A'}", style="bold blue"
+        )
+        greeting_table.add_row(f"Own IP: {self._own_ip or 'N/A'}", style="bold purple")
         greeting_table.add_row(f"Own MAC: {self._own_mac or 'N/A'}")
 
         self.console.print(Panel(greeting_table, border_style="green", expand=False))
