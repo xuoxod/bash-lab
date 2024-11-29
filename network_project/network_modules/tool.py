@@ -34,6 +34,8 @@ class Tool:
         self.forwarding_thread = None  # Initialize forwarding thread
         self.packet_queue = Queue(maxsize=1000)  # Initialize packet queue
         self.packet_queue_lock = threading.Lock()  # <--  Must be initialized here
+        self.status_queue = Queue()  # Initialize status queue
+        self.status_queue_lock = threading.Lock()  # <--  Must be initialized here
 
         # Initialize network info immediately
         self.initialize()
@@ -356,6 +358,10 @@ class Tool:
                     break  # Exit gracefully if stop_event is set
 
                 send(poison_packet, verbose=0)
+
+                with self.status_queue_lock:
+                    self.status_queue.put(f"ARP posioned {target_ip}")
+
                 time.sleep(2)
                 retries = 0  # Reset on success
 

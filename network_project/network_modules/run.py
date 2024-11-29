@@ -3,6 +3,7 @@
 import argparse
 import logging
 import os
+from queue import Empty
 import sys
 import time
 
@@ -94,6 +95,12 @@ def main():
                 )
 
                 while not tool.stop_event.is_set():
+                    try:
+                        with tool.status_queue_lock:
+                            status = tool.status_queue.get_nowait()
+                        console.print(status)  # Print the status.
+                    except Empty:
+                        pass  # Don't worry if there are no messages yet.
                     time.sleep(1)
 
             except (
