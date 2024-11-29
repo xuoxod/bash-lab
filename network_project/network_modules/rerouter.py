@@ -323,7 +323,6 @@ class Rerouter:
         with setup_complete:
             setup_complete.wait()  # Wait for table setup to complete in the main thread
 
-        self.printer.start()  # Start pretty print here
         while True:  # Continue until sentinel value is encountered.
             try:
                 item = self.update_queue.get(timeout=1)  # Timeout for responsiveness
@@ -334,14 +333,15 @@ class Rerouter:
                     break  # Break the loop only on sentinel value
 
                 action, *args = item
+
+                # Same actions as before
                 if action == "add_row":
                     self.printer.add_row(*args)  # Correct placement for add_row
                 elif action == "update_cell":
                     self.printer.update_cell(*args)  # Thread-safe update
-                elif action == "barrier":
-                    args[0]()  # Execute barrier release
 
-            except Empty:  # Queue is empty
+                self.printer.print_page()  # Refresh output
+
                 pass  # Do not stop thread, continue looping until sentinel value is received or another error occurs
 
             except Exception as print_error:  # Handle unexpected printing errors.

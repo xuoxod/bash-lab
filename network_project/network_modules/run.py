@@ -4,6 +4,7 @@ import argparse
 import logging
 import os
 from queue import Empty
+import subprocess
 import sys
 import time
 
@@ -24,6 +25,7 @@ from networkexceptions import (
     NetworkError,
     PacketProcessingError,
 )
+from itertools import cycle  # For cycling through styles
 
 
 # Configure Rich logging
@@ -113,27 +115,110 @@ def main():
     # Parse arguments
     args = parser.parse_args()
 
-    # try block:
+    # Extended style list for more color variety (at least 12 now)
+    styles = cycle(
+        [
+            Style(color="bright_blue"),
+            Style(color="yellow"),
+            Style(color="magenta"),
+            Style(color="bright_green"),
+            Style(color="bright_cyan"),
+            Style(color="red"),
+            Style(color="bright_magenta"),
+            Style(color="bright_yellow"),
+            Style(color="dark_orange"),  # Use "dark_orange" (or "orange1")
+            Style(color="sea_green2"),
+            Style(color="medium_purple1"),
+            Style(color="light_goldenrod1"),
+            Style(color="deep_sky_blue2"),  # additional color
+            Style(color="orange3"),  # Use orange3 (or other orange variants)
+            Style(color="orchid1"),  # Orchid
+            Style(color="pale_green1"),  # Pale Green
+        ]
+    )
+
     try:
         tool = Tool(interface=args.interface, greet=True)
 
-        if args.target:  # Traffic rerouting mode (add actual logic here)
-            console.print("[yellow]Traffic rerouting is not yet implemented.[/]")
-            # ... (Add your traffic rerouting code here using the 'tool' object)
+        if args.target:
+            try:
+                target_ip = args.target
+                gateway_ip = tool.get_gateway_ip()
+                target_mac = tool._get_mac(target_ip)
+                gateway_mac = tool._get_mac(gateway_ip)
 
-        elif args.send_info_packet:  # Send info packet mode
+                if args.scapyforwarding:
+                    tool.target_ip = target_ip
+                    tool.target_mac = target_mac
+                    tool.gateway_mac = gateway_mac
+                    tool.use_scapy_forwarding = True
+
+                    tool.start_sniffer()
+                    console.print(
+                        f"[bold green]Traffic rerouting started (Scapy). Press Ctrl+C to stop.[/]"
+                    )
+                    try:
+                        while True:
+                            time.sleep(1)
+                    except KeyboardInterrupt:
+                        tool.stop_sniffer()
+                        tool._restore_arp()
+                        console.print(
+                            "[bold yellow]Traffic rerouting stopped. ARP table restored.[/]"
+                        )
+                else:  # Use system IP forwarding (iptables/sysctl)
+                    try:
+                        subprocess.run(
+                            ["sysctl", "-w", "net.ipv4.ip_forward=1"], check=True
+                        )
+                        subprocess.run(
+                            [
+                                "iptables",
+                                "-t",
+                                "nat",
+                                "-A",
+                                "PREROUTING",
+                                "-p",
+                                "tcp",
+                                "--destination-port",
+                                "80",
+                                "-j",
+                                "REDIRECT",
+                                "--to-ports",
+                                "8080",
+                            ],
+                            check=True,
+                        )
+                        console.print(
+                            f"[bold green]Traffic rerouting started (sysctl/iptables).[/]"
+                        )
+                        console.print(
+                            f"[bold yellow]Remember to disable forwarding and clear iptables rules when done using 'sysctl -w net.ipv4.ip_forward=0' and 'iptables -F -t nat'.[/]"
+                        )
+
+                    except subprocess.CalledProcessError as e:
+                        console.print(
+                            f"[bold red]Error setting up forwarding: {e}\nCheck if you have sudo/root privileges.[/]"
+                        )
+                        sys.exit(1)
+
+            except AddressResolutionError as e:
+                console.print(f"[bold red]ARP Resolution Error: {e}[/]")
+                sys.exit(1)
+
+        elif args.send_info_packet:
             try:
                 tool.send_info_packet(args.send_info_packet, use_udp=not args.raw)
                 console.print(
                     f"[bold green]Information packet sent to: {args.send_info_packet}[/]"
                 )
-                tool.pretty_print_replies()  # Process any replies
+                tool.pretty_print_replies()  # Process replies
             except (
                 PacketSendError,
                 PacketReceiveError,
                 AddressResolutionError,
                 PacketProcessingError,
-            ) as e:  # Handles from tool
+            ) as e:
                 console.print(f"[bold red]{e}[/]")
                 sys.exit(1)
 
@@ -147,14 +232,24 @@ def main():
                 sys.exit(1)
 
             else:
-                # Display the information if available.
                 netinfo_table = Table(title="Network Information", style="bold cyan")
+                netinfo_table.add_column("Property", justify="right")
+                netinfo_table.add_column("Value")  # No predefined style here
 
-                netinfo_table.add_column(
-                    "Property", style="bold white", justify="right"
-                )  # Right-align properties
+                for property_name, value in [
+                    ("Interface:", tool.get_interface()),
+                    ("Gateway IP:", tool.get_gateway_ip()),
+                    ("Your IP:", tool.get_own_ip()),
+                    ("Your MAC:", tool.get_own_mac()),
+                ]:
+                    current_style = next(styles)  # Get the next style from the cycle
 
-                netinfo_table.add_column("Value", style="green")
+                    netinfo_table.add_row(
+                        Text(property_name, style=current_style),
+                        Text(
+                            value, style=current_style
+                        ),  # Use the same style for the value
+                    )
 
                 # Use Text and Style for finer color control:
 
@@ -169,22 +264,22 @@ def main():
                     Style(color="bright_yellow"),
                 ]
 
-                netinfo_table.add_row(
-                    Text("Interface:", style=styles[0]),
-                    Text(tool.get_interface(), style=styles[1]),
-                )
-                netinfo_table.add_row(
-                    Text("Gateway IP:", style=styles[2]),
-                    Text(tool.get_gateway_ip(), style=styles[3]),
-                )
-                netinfo_table.add_row(
-                    Text("Your IP:", style=styles[4]),
-                    Text(tool.get_own_ip(), style=styles[5]),
-                )
-                netinfo_table.add_row(
-                    Text("Your MAC:", style=styles[6]),
-                    Text(tool.get_own_mac(), style=styles[7]),
-                )
+                # netinfo_table.add_row(
+                #     Text("Interface:", style=styles[0]),
+                #     Text(tool.get_interface(), style=styles[1]),
+                # )
+                # netinfo_table.add_row(
+                #     Text("Gateway IP:", style=styles[2]),
+                #     Text(tool.get_gateway_ip(), style=styles[3]),
+                # )
+                # netinfo_table.add_row(
+                #     Text("Your IP:", style=styles[4]),
+                #     Text(tool.get_own_ip(), style=styles[5]),
+                # )
+                # netinfo_table.add_row(
+                #     Text("Your MAC:", style=styles[6]),
+                #     Text(tool.get_own_mac(), style=styles[7]),
+                # )
 
                 console.print(Panel.fit(netinfo_table))
 

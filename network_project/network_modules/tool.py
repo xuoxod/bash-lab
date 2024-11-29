@@ -1,3 +1,6 @@
+#!/usr/bin/python3
+
+
 import os
 import getpass
 import netifaces
@@ -274,12 +277,6 @@ class Tool:
                         # Packet not related to target or gateway
                         packet.show()
                         sendp(packet, verbose=0, iface=self._interface)
-
-                    with self.packet_queue_lock:
-                        try:
-                            self.packet_queue.put_nowait(packet.copy())
-                        except queue.Full:
-                            logger.warning("Packet queue full. Dropping packet.")
 
                     if self.use_scapy_forwarding:
                         sendp(packet, verbose=0, iface=self._interface)
