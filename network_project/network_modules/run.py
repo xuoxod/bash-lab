@@ -232,11 +232,14 @@ def main():
                 sys.exit(1)
 
             else:
+                node_name = (
+                    f"{str.capitalize(os.uname().nodename)}'s Network Information"
+                )
                 netinfo_table = Table(
-                    title="Network Information",
+                    title=f"{node_name}",
                     style="bold white",
                     highlight=True,
-                    caption=f"System: {os.uname().sysname} {os.uname().release}",
+                    caption=f"Kernel: {os.uname().sysname} {os.uname().release}",
                     border_style=Style(color="white"),
                 )
                 netinfo_table.add_column("Property", justify="right")
