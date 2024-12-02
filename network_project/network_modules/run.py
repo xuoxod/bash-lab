@@ -26,7 +26,7 @@ from networkexceptions import (
     PacketProcessingError,
 )
 from itertools import cycle  # For cycling through styles
-
+from helpers.packetmaker import PacketMaker as packm
 
 # Configure Rich logging
 logging.basicConfig(
@@ -112,6 +112,14 @@ def main():
         help="Send information packet using raw IP (default: UDP)",
     )
 
+    # sysinfo argument -si or --sysinfo
+    parser.add_argument(
+        "-si",
+        "--sysinfo",
+        action="store_true",
+        help="Display system information (OS, CPU, etc.)",
+    )
+
     # Parse arguments
     args = parser.parse_args()
 
@@ -138,7 +146,7 @@ def main():
     )
 
     try:
-        tool = Tool(interface=args.interface, greet=True)
+        tool = Tool(interface=args.interface, greet=False)
 
         if args.target:
             try:
@@ -208,18 +216,50 @@ def main():
 
         elif args.send_info_packet:
             try:
-                tool.send_info_packet(args.send_info_packet, use_udp=not args.raw)
-                console.print(
-                    f"[bold green]Information packet sent to: {args.send_info_packet}[/]"
+                replies = tool.send_info_packet(
+                    args.send_info_packet, use_udp=not args.raw
                 )
-                tool.pretty_print_replies()  # Process replies
+
+                if replies:
+                    if (
+                        isinstance(replies, list) and len(replies) > 0
+                    ):  # Check if a list of responses was returned.
+                        console.print("[bold green]Received multiple replies:[/]")
+                        for sent, received in replies:
+                            console.print(
+                                Panel(
+                                    str(received.summary()),
+                                    title="Packet Reply",
+                                    border_style="bold green",
+                                )
+                            )
+                    elif replies:  # Assuming its a packet.
+                        console.print(
+                            Panel(
+                                str(replies.summary()),
+                                title="Packet Reply",
+                                border_style="bold green",
+                            )
+                        )
+                else:
+                    console.print(
+                        f"[bold yellow]No replies received from {args.send_info_packet}[/]"
+                    )
+
             except (
                 PacketSendError,
                 PacketReceiveError,
                 AddressResolutionError,
-                PacketProcessingError,
-            ) as e:
-                console.print(f"[bold red]{e}[/]")
+            ) as e:  # Correct exception handling for send_info_packet
+                console.print(f"[bold red]Error: {e}[/]")
+                sys.exit(1)
+
+        elif args.sysinfo:
+            try:
+                packet_maker = packm(interface=args.interface)
+                packet_maker.print_system_info()  # Directly call the updated print method
+            except Exception as e:
+                console.print(f"[bold red]Error: {e}[/]")
                 sys.exit(1)
 
         elif args.netinfo or (
@@ -275,7 +315,7 @@ def main():
     except (
         Exception
     ) as e:  # Catch any other unexpected exceptions (non-network related)
-        console.print_exception(f"General exception: {e}\n")
+        console.print_exception(f"General exception: {e}")
         sys.exit(1)
 
     sys.exit(0)

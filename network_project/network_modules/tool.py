@@ -10,15 +10,18 @@ import threading  # For threading.Thread and threading.Lock
 import time  # For time.sleep()
 import errno  # For errno (used for error checking in threads)
 import queue
+import scapy
 
 from scapy.all import *  #  Import all of Scapy
-from scapy.all import IP, Ether, ARP, UDP
+from scapy.all import IP, Ether, ARP, UDP, TCP, ICMP, srp
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from textcolors import TextColors
 from queue import Queue, Empty
 from networkexceptions import *
+from helpers.netutil import NetUtil as netutil
+
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -50,41 +53,6 @@ class Tool:
             greet and self.is_network_info_available()
         ):  # Greet only if initialization was successful
             self.greet_user()
-
-    def initialize_(self):
-        """Retrieves and stores network information."""
-        try:
-            self._interface = self._get_default_interface()
-            if self._interface is None:
-                raise RuntimeError(
-                    "No suitable network interface found."
-                )  # Raise exception to be caught
-
-            self._gateway_ip = self._get_default_gateway()
-            self._own_ip = self._get_own_ip()
-            self._own_mac = self._get_own_mac()
-
-            if not all([self._gateway_ip, self._own_ip, self._own_mac]):
-                logger.warning(
-                    "Some network information could not be retrieved."
-                )  # Consistent Logging
-        except (
-            KeyError,
-            IndexError,
-            ValueError,
-            OSError,
-            AttributeError,
-            RuntimeError,  # Catch the potential RuntimeError
-        ) as e:
-            self.console.print(
-                f"{TextColors.FAIL}Error during initialization: {e}{TextColors.ENDC}",
-                style="bold red",
-            )
-            # Clear network info on failure
-            self._interface = None
-            self._gateway_ip = None
-            self._own_ip = None
-            self._own_mac = None
 
     def initialize(self):
         """Retrieves and stores network information."""
@@ -198,7 +166,7 @@ class Tool:
             ans, _ = srp(
                 Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip_address),
                 timeout=2,
-                verbose=0,
+                verbose=1,
             )
             if ans:
                 return ans[0][1].hwsrc
@@ -340,6 +308,8 @@ class Tool:
     def start_sniffer(self):  # Correct indentation
         """Starts the asynchronous sniffer."""
         if not hasattr(self, "sniffer") or not self.sniffer.running:
+            conf.sniff_promisc = True  # Enable promiscuous mode here
+
             self.sniffer = AsyncSniffer(
                 prn=self.process_packet, store=False, iface=self._interface
             )
@@ -353,92 +323,162 @@ class Tool:
     #       Packet logic
     #######
 
-    def send_info_packet(self, dest_ip, dest_mac=None, use_udp=True):
-        """Crafts and sends a packet containing IP/MAC information to a destination."""
+    def send_info_packet(self, dest_ip, dest_mac=None, use_udp=True, timeout=3):
+        """Crafts, sends a packet, and handles replies asynchronously."""
         if not self.is_network_info_available():
             self.console.print(
                 f"{TextColors.FAIL}Error: Network information not available.{TextColors.ENDC}",
                 style="bold red",
             )
-            return
+            return None
 
-        if dest_mac is None:
-            dest_mac = self._get_mac(dest_ip)
-            if dest_mac is None:
-                self.console.print(
-                    f"{TextColors.FAIL}Error: Could not resolve MAC address for {dest_ip}.{TextColors.ENDC}",
-                    style="bold red",
-                )
-                return
+        scan_results = self.scan_network(dest_ip)  # ARP scan
+        if scan_results is None:  # Handle ARP scan failure
+            return None  # Return None
 
-        # Craft the information packet (using UDP or raw IP)
+        # Initialize dest_mac - fixes problem where dest_mac might be undefined if not found from scan.
+        dest_mac = None
 
-        if use_udp:  # More reliable, less likely to be blocked
-            payload = f"Interface: {self._interface}, IP: {self._own_ip}, MAC: {self._own_mac}"
-            packet = (
-                Ether(src=self._own_mac, dst=dest_mac)
-                / IP(src=self._own_ip, dst=dest_ip)
-                / UDP(sport=6666, dport=7777)  # Arbitrary ports
-                / payload
+        for result in scan_results:  # Find dest_mac in ARP scan results.
+            if result["IP"] == dest_ip:
+                dest_mac = result["MAC"]
+                break  # Found MAC address
+
+        if dest_mac is None:  # MAC address not found from ARP scan. Notify and return.
+            self.console.print(
+                f"[bold red]Could not resolve MAC address for {dest_ip} during scan.[/]"
             )
-
+            return None  # Indicate failure
         else:
-            # Example raw IP usage (less common). Consider TCP for reliable transport if firewall issues with UDP arise.
-            payload = bytes(
-                f"Raw Packet: Interface: {self._interface}, IP: {self._own_ip}, MAC: {self._own_mac}",
-                "utf-8",
+            self.console.print(
+                f"\n\t[bold]Target's IP: {dest_ip} and MAC address: {dest_mac}[/]\n\n\n"
             )
 
-            # Consider TCP if UDP is unreliable due to firewalls
-            packet = (
-                Ether(src=self._own_mac, dst=dest_mac)
-                / IP(src=self._own_ip, dst=dest_ip)
-                / payload
-            )
+            # Craft the information packet (using UDP or raw IP)
+            if use_udp:  # UDP Packet
+                marker = "NetworkOracle-InfoPacket"
+                payload = (
+                    marker + f"Interface: {self._interface}, ..."
+                )  # Add marker to the beginning
 
-        # Start a new thread to send and receive the packet
-        send_thread = threading.Thread(
-            target=self.send_and_receive, args=(packet,), daemon=True
-        )
-        send_thread.start()
+                payload = f"Interface: {self._interface}, IP: {self._own_ip}, MAC: {self._own_mac}"
 
-    def send_and_receive(self, packet):
-        """Sends a packet and receives a reply."""
+                packet = (
+                    Ether(src=self._own_mac, dst=dest_mac)
+                    / IP(src=self._own_ip, dst=dest_ip, flags="DF")
+                    / UDP(sport=30660, dport=30770)
+                    / payload
+                )
+            else:  # Raw IP Packet
+                payload = bytes(
+                    f"Raw Packet: Interface: {self._interface}, IP: {self._own_ip}, MAC: {self._own_mac}",
+                    "utf-8",
+                )
+                packet = (
+                    Ether(src=self._own_mac, dst=dest_mac)
+                    / IP(src=self._own_ip, dst=dest_ip)
+                    / payload
+                )
 
+            def handle_reply(reply):  # Correct nested callback
+                """Handles replies/timeouts/errors and prints output."""
+
+                if reply:
+                    self.console.print(
+                        Panel(
+                            str(reply.summary()),
+                            title="Packet Reply",
+                            border_style="green",
+                        )
+                    )  # Print reply summary.
+
+                elif isinstance(
+                    reply, str
+                ):  # String indicates an error from send_and_receive.
+                    self.console.print(reply)  # Display error string from callback.
+                else:
+                    # Handle timeout (None) - no reply received.
+                    self.console.print(
+                        f"[bold yellow]No reply received from {dest_ip}[/]"
+                    )
+
+            try:
+                if use_udp:
+                    filter_str = f"udp and src host {dest_ip} and dst port 30660 and src port 30770 and dst host {self._own_ip}"  # Target IP, your port, Your IP
+                else:  # Raw IP (must specify a protocol above IP if any)
+                    filter_str = f"ip and src host {dest_ip} and dst host {self._own_ip}"  # Filter by source and destination IP
+
+                answered, unanswered = srp(
+                    packet,
+                    timeout=timeout,
+                    verbose=1,
+                    iface=self._interface,
+                    # filter=filter_str,
+                    multi=True,  # Apply filter
+                )
+
+                for sent, received in answered:  # Examine each response.
+                    self.console.print(
+                        Panel(
+                            str(received.summary()),
+                            title="Packet Reply",
+                            border_style="green",
+                        )
+                    )
+                return answered  # Process the received packet
+
+            except OSError as e:
+                self.console.print(f"[bold red]Error sending packet: {e}[/]")
+                return None  # Return None if send error
+
+            except Exception as e:
+                self.console.print(f"[bold red]Error: {e}[/]")
+                return None  # Return None if receive error
+
+    def send_and_receive(self, packet, callback=None):
+        """Sends a packet and executes the callback with the result or error."""
         try:
-            replies = sr1(packet, timeout=2, verbose=0, iface=self._interface)
-            if replies:
-                with self.reply_queue_lock:
-                    self.reply_queue.put(replies)
+            bpf_filter = self._build_reply_filter(packet)
+
+            replies = sr1(
+                packet, timeout=2, verbose=1, filter=bpf_filter, iface=self._interface
+            )  # Correct sr1() call with filtering
+
+            if callback:  # Always invoke the callback if one is provided
+                callback(replies)
         except OSError as e:
-            if e.errno == errno.EPERM:
-                raise PacketSendError(
-                    f"Permission denied when sending packet: {e}"
-                )  # Raise only
-            else:
-                raise PacketSendError(
-                    f"OSError sending packet: {e}"
-                ) from e  # Raise only
+            if callback:
+                callback(
+                    f"[bold red]OSError sending packet: {e}[/]"
+                )  # Callback handles errors
+        except Exception as e:
+            if callback:
+                callback(
+                    f"[bold red]Error receiving packet: {e}[/]"
+                )  # Callback handles errors
+
+    def _build_reply_filter(self, packet):
+        """Builds a BPF filter to capture a wider range of replies."""
+        return f"(src host {packet[IP].dst}) or (dst host {packet[IP].src} and (icmp or udp or tcp))"
+
+    def scan_network(
+        self, target_ip
+    ):  # Remove threading logic from here. method should block until reply.
+        """Sends ARP requests and returns IP-MAC mappings."""
+        try:
+            ans, unans = srp(
+                Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=target_ip),
+                timeout=2,
+                verbose=1,
+                iface=self._interface,
+            )  # Use srp() for multiple responses
+            results = []
+            for sent, received in ans:  # Process replies
+                results.append({"IP": received.psrc, "MAC": received.hwsrc})
+            return results  # Return results or None
 
         except Exception as e:
-            raise PacketReceiveError from e  # Raise only
-
-    def pretty_print_replies(self):
-        """Prints replies from the reply queue."""
-
-        while True:  # Loop continuously to check for replies
-            with self.reply_queue_lock:
-                try:
-                    reply = (
-                        self.reply_queue.get_nowait()
-                    )  # Get reply from queue if available
-                    self.reply_queue.task_done()  # Signal task completion
-                except Empty:
-                    break  # Exit the inner loop if no replies are in the queue.
-
-            if reply:  # Check if reply is not None.
-                self.console.print(
-                    Panel(str(reply), title="Packet Reply", border_style="green")
-                )
-
-            time.sleep(1)  # Check every second (adjust as needed)
+            self.console.print(
+                f"[bold red]Error during network scan: {e}[/]"
+            )  # Show any errors from network scan.
+            return None  # Indicate failure

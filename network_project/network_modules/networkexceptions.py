@@ -7,6 +7,12 @@ class NetworkError(Exception):  # A more general base class
     pass
 
 
+class NoIPError(Exception):  # A more general base class
+    """Base class for exceptions related IP addresses."""
+
+    pass
+
+
 class InterfaceError(NetworkError):  # Category for interface issues
     """Base class for exceptions related to network interfaces."""
 
