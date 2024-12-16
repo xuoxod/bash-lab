@@ -12,6 +12,7 @@ from helpers.networkscanner import NetworkScanner
 from helpers.netutil import NetUtil
 from helpers.prettyprinter import PrettyPrinter
 from helpers.networkexceptions import NoIPError, InterfaceError  # Import both
+from dnsresolver import DNSResolver
 
 
 pretty_printer = PrettyPrinter()
@@ -137,6 +138,8 @@ def main():
                 "Could not determine IP or MAC for selected interface."
             )
 
+        print(f"Args Interface:\t{args.interface}\n")
+
         packet_maker = PacketMaker(
             own_ip,
             own_mac,
@@ -146,7 +149,11 @@ def main():
             cpu_info,
             interface=args.interface,
         )
-        scanner = NetworkScanner(own_ip, own_mac, interface=args.interface)
+
+        scanner = NetworkScanner(
+            own_ip, own_mac, packet_maker, interface=args.interface
+        )
+        dns_resolver = DNSResolver()  # Create DNSResolver instance.
 
         if args.craft_udp:
             try:
@@ -214,39 +221,39 @@ def main():
 
         elif args.protocol_scan:
             try:
-                packet_maker.ip_scan(args.protocol_scan, verbose=True)
+                scanner.ip_scan(args.protocol_scan, verbose=True)
 
             except Exception as e:
                 print(f"Error during protocol scan: {e}")
 
         elif args.arp_ping:
             try:
-                packet_maker.arp_ping(args.arp_ping, verbose=True)
+                scanner.arp_ping(args.arp_ping, verbose=True)
             except Exception as e:
                 print(f"Error during ARP ping: {e}")
 
         elif args.icmp_ping:
             try:
-                packet_maker.icmp_ping(args.icmp_ping, verbose=True)
+                scanner.icmp_ping(args.icmp_ping, verbose=True)
             except Exception as e:
                 print(f"Error during ICMP ping: {e}")
 
         elif args.tcp_ping:
             try:
-                packet_maker.tcp_ping(args.tcp_ping, verbose=True)
+                scanner.tcp_ping(args.tcp_ping, verbose=True)
             except Exception as e:
                 print(f"Error during TCP ping: {e}")
 
         elif args.udp_ping:
             try:
-                packet_maker.udp_ping(args.udp_ping, verbose=True)
+                scanner.udp_ping(args.udp_ping, verbose=True)
             except Exception as e:
                 print(f"Error during UDP ping: {e}")
 
         elif args.dns_server and args.domain:
-            result = packet_maker.dns_request(
-                args.dns_server, args.domain, args.record_type
-            )
+            result = dns_resolver.resolve(
+                args.domain, record_type=args.record_type, dns_server=args.dns_server
+            )  # using DNSResolver
             if result:
                 print(result)
 

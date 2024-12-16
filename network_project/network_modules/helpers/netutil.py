@@ -118,21 +118,24 @@ logger = logging.getLogger(__name__)
 
 
 class NetUtil:
+
     def __init__(self, interface=None):
-        self.interface = interface or self.get_default_interface()
-        if not self.interface:
-            raise InterfaceError(
-                "No valid network interface found."
-            )  # More specific exception
+        self.interface = interface
+        if not self.interface:  # Only try to get default if none is provided.
+            default_iface = self.get_default_interface()
+            if default_iface:
+                self.interface = default_iface
+            else:
+                raise InterfaceError(
+                    "No valid network interface specified or found."
+                )  # Correct exception type
 
     def get_default_interface(self):
         try:
             gws = netifaces.gateways()
             return gws["default"][netifaces.AF_INET][1]
-        except KeyError:
-            raise DefaultInterfaceNotFoundError(
-                "No default gateway found."
-            )  # Raise exception instead of returning None
+        except (KeyError, IndexError):  # Catch all possible lookup errors
+            return None  # Return None. Let the constructor handle it.
 
     def get_own_mac(self):
         try:

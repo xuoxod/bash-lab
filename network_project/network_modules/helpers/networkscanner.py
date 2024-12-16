@@ -9,10 +9,11 @@ from networkexceptions import NoIPError
 
 
 class NetworkScanner:
-    def __init__(self, own_ip, own_mac, interface=None):
+    def __init__(self, own_ip, own_mac, packet_maker, interface=None):
         self.interface = interface
         self.own_ip = own_ip
         self.own_mac = own_mac
+        self.packet_maker = packet_maker  # Store the packet_maker instance
         self.pretty_printer = pp()
 
     def ack_scan(self, dst_ip, ports, verbose=0):

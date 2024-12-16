@@ -4,9 +4,10 @@ import os
 import getpass
 import logging
 import socket  # Import socket for protocol constants
+import netifaces
 from scapy.all import *
 from .prettyprinter import PrettyPrinter as pp  # Assuming definition elsewhere
-from networkexceptions import NoIPError
+from networkexceptions import NoIPError, DefaultInterfaceNotFoundError
 from .packetutils import PacketUtils
 
 logging.basicConfig(
@@ -119,164 +120,19 @@ class PacketMaker:
         )
         return packet
 
-    def ack_scan(self, dst_ip, ports, verbose=0):
-        ans, unans = sr(
-            IP(dst=dst_ip) / TCP(dport=ports, flags="A"), timeout=2, verbose=verbose
-        )
-
-        unfiltered_ports = []
-        filtered_ports = []
-
-        for sent, received in ans:
-            if sent[TCP].dport == received[TCP].sport:
-                unfiltered_ports.append(sent[TCP].dport)
-
-        for sent in unans:
-            filtered_ports.append(sent[TCP].dport)
-
-        results = {
-            "Unfiltered Ports": unfiltered_ports,
-            "Filtered Ports": filtered_ports,
-        }
-        self.pretty_printer.pprint(
-            results, title="ACK Scan Results", style="bold yellow"
-        )
-
-        return unfiltered_ports, filtered_ports  # Return both lists
-
-    def xmas_scan(self, dst_ip, ports, verbose=0):
-        ans, unans = sr(
-            IP(dst=dst_ip) / TCP(dport=ports, flags="FPU"), timeout=2, verbose=verbose
-        )
-
-        closed_ports = []
-        for sent, received in ans:
-            if received.haslayer(TCP) and received[TCP].flags == "RA":
-                closed_ports.append(sent.dport)
-
-        for sent in unans:  # Include unanswered packets
-            closed_ports.append(sent.dport)  # Indicate potentially filtered
-
-        results = {"Closed/Filtered Ports": closed_ports}  # Show closed/filtered
-        self.pretty_printer.pprint(
-            results, title="Xmas Scan Results", style="bold red"
-        )  # Update message
-        return closed_ports  # Return the identified ports
-
-    def ip_scan(self, dst_ip, verbose=0):
-        ans, unans = sr(
-            IP(dst=dst_ip, proto=(0, 255)) / "SCAPY",
-            retry=2,
-            timeout=2,
-            verbose=verbose,
-        )
-        supported_protocols = []
-        for sent, received in ans:
-            supported_protocols.append(sent.proto)
-        results = {"Supported Protocols": supported_protocols}
-        self.pretty_printer.pprint(results, title="IP Scan Results", style="bold blue")
-        return supported_protocols
-
-    def arp_ping(self, target_network, verbose=0):
-        ans, unans = srp(
-            Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=target_network),
-            timeout=2,
-            verbose=verbose,
-        )
-        live_hosts = []
-        for sent, received in ans:
-            live_hosts.append((received.psrc, received.hwsrc))
-
-        results = {"Live Hosts": live_hosts}
-        self.pretty_printer.pprint(
-            results, title="ARP Ping Results", style="bold magenta"
-        )
-        return live_hosts
-
-    def icmp_ping(self, target_network, verbose=0):  # Updated name
-        ans, unans = sr(IP(dst=target_network) / ICMP(), timeout=2, verbose=verbose)
-        live_hosts = []
-        for sent, received in ans:
-            live_hosts.append(received.src)
-
-        results = {"Live Hosts": live_hosts}
-        self.pretty_printer.pprint(
-            results, title="ICMP Ping Results", style="bold green"  # Updated title
-        )
-        return live_hosts
-
-    def tcp_ping(self, target_network, dport=80, verbose=0):  # Renamed to tcp_ping
-        ans, unans = sr(
-            IP(dst=target_network) / TCP(dport=dport, flags="S"),
-            timeout=2,
-            verbose=verbose,
-        )
-        live_hosts = []
-        for sent, received in ans:
-            live_hosts.append(received.src)
-
-        results = {"Live Hosts": live_hosts}
-        self.pretty_printer.pprint(
-            results, title="TCP Ping Results", style="bold cyan"
-        )  # Updated title and style
-        return live_hosts  # Return live hosts
-
-    def udp_ping(self, target_network, dport=0, verbose=0):  # Renamed to udp_ping
-        ans, unans = sr(
-            IP(dst=target_network) / UDP(dport=dport), timeout=2, verbose=verbose
-        )
-        live_hosts = []
-        for sent, received in ans:
-            if received.haslayer(ICMP) and received[ICMP].type == 3:
-                live_hosts.append(received.src)  # Store source IP of ICMP unreachable
-            elif received.haslayer(UDP):  # Check for direct UDP replies as well
-                live_hosts.append(received.src)
-
-        results = {"Live Hosts": live_hosts}
-        self.pretty_printer.pprint(
-            results,
-            title="UDP Ping Results",
-            style="bold yellow",  # Updated title and style
-        )
-
-        return live_hosts
-
-    def dns_request(self, target_dns, domain, record_type="A", verbose=0):
-        ans = sr1(
-            IP(dst=target_dns)
-            / UDP(sport=RandShort(), dport=53)
-            / DNS(rd=1, qd=DNSQR(qname=domain, qtype=record_type)),
-            timeout=2,
-            verbose=verbose,
-        )
-        if ans:
-            if record_type == "A":
-                self.pretty_printer.pprint(
-                    ans.an[0].rdata, title="DNS Request Results", style="bold green"
-                )  # Correct title and style
-                return ans.an[0].rdata
-            elif record_type == "SOA":
-                results = {
-                    "mname": ans.an[0].mname,  # Corrected field names for SOA
-                    "rname": ans.an[0].rname,  # Corrected field names for SOA
-                }
-                self.pretty_printer.pprint(
-                    results,
-                    title="DNS Request Results",
-                    style="bold blue",  # Correct title
-                )
-                return results
-            elif record_type == "MX":
-                results = [x.exchange for x in ans.an]
-                self.pretty_printer.pprint(
-                    results,
-                    title="DNS Request Results",
-                    style="bold magenta",  # Correct title and style
-                )
-                return results  # Return MX records if available
-        return None  # Return None for timeout or error
+    def _get_default_interface(self):
+        try:
+            gws = netifaces.gateways()
+            return gws["default"][netifaces.AF_INET][1]
+        except (KeyError, IndexError):  # Catch all possible lookup errors
+            return None  # Return None. Let the constructor handle it.
 
     def print_system_info(self):
+        if not self.interface:
+            self.interface = self._get_default_interface()
+            if not self.interface:
+                raise DefaultInterfaceNotFoundError("No valid network interface found.")
+
         data = [
             ["Property", "Value"],
             ["Interface", self.interface],
