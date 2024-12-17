@@ -6,6 +6,7 @@ import logging
 import socket  # Import socket for protocol constants
 import netifaces
 from scapy.all import *
+from scapy.all import Ether, IP, UDP, TCP, ICMP, raw
 from .prettyprinter import PrettyPrinter as pp  # Assuming definition elsewhere
 from networkexceptions import NoIPError, DefaultInterfaceNotFoundError
 from .packetutils import PacketUtils
@@ -54,7 +55,13 @@ class PacketMaker:
             src_port = RandShort()
 
         if marker:
-            payload = marker + payload
+            payload = marker + (
+                payload or ""
+            )  # or marker + bytes(payload) if you intend to use bytes
+        elif payload is None:
+            payload = (
+                "Default TCP Payload"  # or b"Default TCP Payload" to directly use bytes
+            )
 
         ip_header = self.packet_utils.craft_ip_header(
             src_ip, dst_ip, socket.IPPROTO_UDP
@@ -106,7 +113,13 @@ class PacketMaker:
             raise NoIPError("Could not determine source IP address.")
 
         if marker:
-            payload = marker + payload
+            payload = marker + (
+                payload or ""
+            )  # or marker + bytes(payload) if you intend to use bytes
+        elif payload is None:
+            payload = (
+                "Default TCP Payload"  # or b"Default TCP Payload" to directly use bytes
+            )
 
         ip_header = self.packet_utils.craft_ip_header(
             src_ip, dst_ip, socket.IPPROTO_ICMP
