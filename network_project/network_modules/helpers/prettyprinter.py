@@ -69,7 +69,7 @@ class PrettyPrinter:
             title=title,
             style=style,
             show_header=True,
-            header_style="bold magenta",
+            header_style="bold cyan",
             width=int(
                 console_width * 0.8
             ),  # Use 80% of console width (adjust as needed)
