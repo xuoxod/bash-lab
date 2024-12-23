@@ -11,10 +11,9 @@ import threading
 import queue
 import subprocess  # For Nmap
 import xml.etree.ElementTree as ET  # For XML parsing
-import os  # For checking nmap existence
 import time  # For pausing after reset
 import csv
-from scapy.all import ARP, Ether, srp  # For ARP scanning
+from scapy.all import ARP, Ether, srp, conf  # For ARP scanning
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -185,45 +184,46 @@ class NetworkScanner:
 
         return [str(p) for p in ports]
 
-    def _execute_nmap_scan(
-        self, target, ports, scan_type
-    ):  # More robust and correct Nmap execution
+    def _execute_nmap_scan(self, target, ports, scan_type):
         """Executes an Nmap scan against a single target."""
 
-        nmap_path = shutil.which("nmap")  # More robust check
+        nmap_path = shutil.which("nmap")
         if nmap_path is None:
             logger.error("Nmap not found. Please install Nmap.")
             return None
 
         try:
-            nmap_args = ["sudo", nmap_path, "-oX", "-"]  # Use which to find path
+            nmap_args = ["sudo", nmap_path, "-oX", "-"]
 
-            if ports:
+            if ports:  # Check if ports is not an empty list
                 nmap_args.extend(["-p", ",".join(ports)])
 
-            if (
-                scan_type and scan_type != "help"
-            ):  # Checks if a scan_type is given and not "help"
+            if scan_type and scan_type != "help":
                 nmap_scan_type_arg = next(
                     (
                         f"-s{code.upper()}"
-                        for code, name in self.SCAN_TYPES.items()
-                        if name == scan_type.upper()
+                        for code, name in self.SCAN_TYPES.items()  # Use items() to iterate through key-value pairs
+                        if name == scan_type.upper()  # Correct scan type check
                     ),
                     None,
-                )  # Find the corresponding Nmap argument in SCAN_TYPES
+                )  # Find corresponding Nmap argument. Efficient and clear.
 
-                if nmap_scan_type_arg:  # If valid nmap scan type argument is found
-                    nmap_args.append(nmap_scan_type_arg)  # Append the correct argument
+                if nmap_scan_type_arg:
+                    nmap_args.append(nmap_scan_type_arg)
 
-            nmap_args.append(target)  # Append the target
+            nmap_args.append(
+                target
+            )  # Append target. Ensures target is always included in args.
 
             process = subprocess.run(
                 nmap_args, capture_output=True, text=True, check=True
-            )  # Run Nmap
-            return process.stdout  # Return XML output
+            )  # Capture errors and raise exceptions. More explicit and robust.
 
-        except subprocess.CalledProcessError as e:
+            return process.stdout
+
+        except (
+            subprocess.CalledProcessError
+        ) as e:  # More specific error handling. Improves diagnostics.
             logger.error(f"Nmap scan failed: {e.stderr}")
             return None
         except Exception as e:
@@ -310,7 +310,9 @@ class NetworkScanner:
                 results[arp_result["ip_address"]] = arp_result
 
         # --- Nmap Scan ---
-        if self.scan_type:  # Only run Nmap if a scan type is selected
+        if (
+            self.scan_type and self.scan_type != "help"
+        ):  # Added check here. More explicit and readable.
             for target in self.targets:
                 nmap_output = self._execute_nmap_scan(
                     target, self.ports, self.scan_type
