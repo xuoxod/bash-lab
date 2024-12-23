@@ -1,0 +1,504 @@
+#!/usr/bin/python3
+
+import argparse
+import logging
+import os
+import getpass
+import ipaddress
+import netifaces
+import threading
+import queue
+import subprocess  # For Nmap
+import xml.etree.ElementTree as ET  # For XML parsing
+import os  # For checking nmap existence
+import time  # For pausing after reset
+from scapy.all import ARP, Ether, srp  # For ARP scanning
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+
+class NetworkScanner:
+    MAX_THREADS = 10
+    COMMON_PORTS = [
+        20,
+        21,
+        22,
+        23,
+        25,
+        53,
+        67,
+        68,
+        69,
+        80,
+        110,
+        123,
+        137,
+        138,
+        139,
+        143,
+        161,
+        443,
+        445,
+        514,
+        631,
+        993,
+        995,
+        1080,
+        1194,
+        1433,
+        1701,
+        1723,
+        3306,
+        3389,
+        5432,
+        5900,
+        5901,
+        8080,
+        8443,
+        10000,
+        30778,
+    ]
+    SCAN_TYPES = {
+        "0": "SYN",
+        "1": "NULL",
+        "2": "FIN",
+        "3": "XMAS",
+        "4": "ACK",
+        "5": "Window",
+        "6": "Maimon",
+        "7": "UDP",
+        "8": "TCP",
+        "9": "IDLE",
+        "10": "SCTP",
+        "11": "OS",
+        "12": "Script",
+        "13": "BET",
+        "14": "CONNECT",
+    }
+    DEFAULT_SCAN_TYPE = "11"  # OS detection
+
+    def __init__(
+        self, interface=None, targets=None, ports=None, scan_type=DEFAULT_SCAN_TYPE
+    ):
+        self.interface = interface or self._get_default_interface()
+        self.own_ip = self._get_ip_address()
+        self.own_mac = self._get_mac_address(self.own_ip)
+        self.targets = self._parse_targets(targets) if targets else []
+        self.ports = self._parse_ports(ports) if ports else self.COMMON_PORTS
+        self.scan_type = scan_type
+        self._lock = threading.Lock()
+        self.csv_filename = "network_scan_results.csv"
+
+    def _get_default_interface(self):
+        """Gets the default network interface."""
+        try:
+            gws = netifaces.gateways()
+            return gws["default"][netifaces.AF_INET][1]  # Interface name
+        except (KeyError, IndexError):  # More specific exception handling
+            logger.error(
+                "Could not determine default interface. Please specify -i/--interface."
+            )
+            return None
+
+    def _get_ip_address(self):
+        """Gets the IP address of the specified interface."""
+        if self.interface:  # Check if interface is not none
+            try:
+                addresses = netifaces.ifaddresses(self.interface)
+                return addresses[netifaces.AF_INET][0]["addr"]  # Get the IP address
+            except (KeyError, IndexError):  # Handle missing key
+                logger.error(
+                    f"Could not get IP address for interface: {self.interface}"
+                )
+                return None  # Return None in case of an error
+        else:
+            logger.error("Interface not found, provide with -i or --interface")
+            return None
+
+    def _get_mac_address(self, ip_address):
+        """Gets the MAC address for a given IP address using ARP."""
+        if not ip_address:
+            logger.error("Unable to get MAC address. IP address not provided.")
+            return None
+        try:
+            arp_request = ARP(pdst=ip_address)
+            broadcast = Ether(dst="ff:ff:ff:ff:ff:ff")
+            arp_request_broadcast = broadcast / arp_request
+            answered_list = srp(
+                arp_request_broadcast, timeout=2, verbose=False, iface=self.interface
+            )[0]
+            return answered_list[0][1].hwsrc if answered_list else None
+
+        except OSError as e:
+            logger.error(f"Error getting MAC address for {ip_address}: {e}")
+            return None
+
+    def _parse_targets(self, targets_str):
+        """Parses target IP addresses or networks from a list of strings."""
+        targets = []
+        for target_str in targets_str:
+            try:
+                # Attempt to parse as a single IP address
+                ip = ipaddress.ip_address(target_str)
+                targets.append(str(ip))
+            except ValueError:
+                try:
+                    # Attempt to parse as a network range (CIDR)
+                    network = ipaddress.ip_network(target_str, strict=False)
+                    for ip in network.hosts():
+                        targets.append(str(ip))
+                except ValueError:
+                    # Log and raise any error from network parsing
+                    logger.error(
+                        f"Invalid target provided: {target_str}. Skipping."
+                    )  # Clear message to help the user determine which target is bad
+        return targets
+
+    def _parse_ports(self, ports_str):
+        """Parses port numbers or ranges from a comma-separated string."""
+        ports = []
+        if ports_str:
+            port_ranges = ports_str.split(",")
+            for port_range in port_ranges:
+                try:
+                    if "-" in port_range:
+                        start, end = map(int, port_range.split("-"))
+                        if 0 <= start <= 65535 and 0 <= end <= 65535:
+                            ports.extend(range(start, end + 1))
+                        else:
+                            logger.warning(f"Invalid port range: {port_range}")
+                    else:
+                        port = int(port_range)
+                        if 0 <= port <= 65535:
+                            ports.append(port)
+                        else:
+                            logger.warning(f"Invalid port: {port}")
+
+                except ValueError:
+                    logger.warning(f"Invalid port specification: {port_range}")
+
+        return [str(p) for p in ports]
+
+    def _execute_nmap_scan(self, target, ports, scan_type):
+        """Executes an Nmap scan against a single target."""
+
+        try:
+            nmap_args = ["sudo", "nmap", "-oX", "-"]  # Output XML to stdout
+
+            if ports:
+                nmap_args.extend(["-p", ",".join(ports)])
+
+            nmap_scan_type = self.SCAN_TYPES.get(scan_type)
+            if scan_type and nmap_scan_type:  # Check if scan_type is provided and valid
+                nmap_args.extend(["-" + nmap_scan_type])  # Nmap uses -sS, -sU, etc.
+
+            nmap_args.append(target)
+
+            process = subprocess.run(
+                nmap_args, capture_output=True, text=True, check=True
+            )
+            return process.stdout  # Return the XML output directly
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Nmap scan failed: {e.stderr}")
+            return None
+        except Exception as e:  # Catch general exceptions during execution
+            logger.error(f"Error during Nmap execution: {e}")
+            return None
+
+    def _process_nmap_output(self, nmap_output):
+        """Processes the XML output from Nmap and extracts relevant information."""
+        try:
+            root = ET.fromstring(nmap_output)  # Parse XML
+            scan_results = []
+
+            for host in root.findall("host"):
+                host_info = {}
+                address_info = host.find("address")
+                if address_info is not None:
+                    host_info["ip_address"] = address_info.get(
+                        "addr"
+                    )  # Extract IP address
+
+                hostnames = host.find("hostnames")
+                if hostnames is not None:
+                    hostname = hostnames.find("hostname")
+                    if hostname is not None:
+                        host_info["hostname"] = hostname.get("name")  # Extract hostname
+
+                os_info = host.find("os")
+                if os_info is not None:  # Extract OS details
+                    osclasses = os_info.findall("osclass")
+                    os_details = [
+                        {
+                            "osfamily": os.get("osfamily"),
+                            "osgen": os.get("osgen"),
+                            "accuracy": os.get("accuracy"),
+                            "vendor": os.get("vendor"),
+                        }  # Updated code. Added osfamily. Add accuracy and vendor.
+                        for os in osclasses
+                    ]
+                    if os_details:
+                        host_info["os"] = os_details[0]
+                    else:
+                        host_info["os"] = None
+
+                ports = []
+                for port in host.find("ports").findall("port"):
+                    port_info = {
+                        "protocol": port.get("protocol"),
+                        "portid": int(port.get("portid")),  # Convert portid to int.
+                        "state": port.find("state").get("state"),
+                        "service": port.find("service").get("name"),
+                        "version": port.find("service").get(
+                            "product"
+                        ),  # Updated code. Get product and version.
+                    }
+                    ports.append(port_info)  # Append updated code
+                host_info["ports"] = ports  # Update host_info
+
+                scan_results.append(host_info)
+
+            return scan_results
+
+        except ET.ParseError as e:
+            logger.error(
+                f"Error parsing Nmap XML output: {e}"
+            )  # Logs XML parsing errors.
+            return None
+
+    def _arp_scan(self, target):
+        """Performs an ARP scan for a single target."""
+        mac = self._get_mac_address(target)  # Use the existing _get_mac_address method
+        if mac:
+            return {"ip_address": target, "mac_address": mac}
+        else:
+            return None
+
+    def scan(self):  # Changed from scan_targets
+        """Performs both ARP and Nmap scans."""
+        results = {}  # Dictionary to store combined results
+
+        # --- ARP Scan (using threads) ---
+        arp_threads = []
+        arp_queue = queue.Queue()
+
+        for target in self.targets:
+            thread = threading.Thread(
+                target=lambda t: arp_queue.put(self._arp_scan(t)), args=(target,)
+            )
+            arp_threads.append(thread)
+            thread.start()
+
+        for thread in arp_threads:
+            thread.join()
+
+        while not arp_queue.empty():
+            arp_result = arp_queue.get()
+            if arp_result:  # Add result to the main dictionary
+                results[arp_result["ip_address"]] = arp_result
+
+        # --- Nmap Scan ---
+        if self.scan_type:  # Only run Nmap if a scan type is selected
+            for target in self.targets:
+                nmap_output = self._execute_nmap_scan(
+                    target, self.ports, self.scan_type
+                )
+
+                if nmap_output:
+                    nmap_results = self._process_nmap_output(nmap_output)
+
+                    if nmap_results:
+                        for (
+                            nmap_result
+                        ) in nmap_results:  # Iterate through each nmap result
+                            ip = nmap_result.get("ip_address")
+                            if (
+                                ip in results
+                            ):  # Update existing results entry with nmap data
+                                results[ip].update(
+                                    nmap_result
+                                )  # Combine/update with Nmap results
+                            else:
+                                results[ip] = nmap_result  # Add new entry
+
+        return list(results.values())  # Return list of combined/updated dictionaries
+
+    def print_results(self, results):  # Updated output
+        """Prints the scan results."""
+        print("-" * 60)
+        print(
+            f"{'IP Address':<15} {'MAC Address':<20} {'Hostname':<20} {'OS':<20} {'Open Ports':<20}"
+        )  # Updated code
+        print("-" * 60)
+
+        for result in results:  # Iterate through the list of dictionaries
+            ip_address = result.get("ip_address", "")
+            mac_address = result.get("mac_address", "")
+            hostname = result.get("hostname", "")
+            os_info = result.get("os", {})
+            os_string = (
+                f"{os_info.get('osfamily', '')} {os_info.get('osgen', '')}"
+                if os_info
+                else ""
+            )  # Updated code. Added osfamily
+            open_ports = ", ".join(
+                [
+                    str(port["portid"])
+                    for port in result.get("ports", [])
+                    if port["state"] == "open"
+                ]
+            )  # Updated code. Add open ports.
+            print(
+                f"{ip_address:<15} {mac_address:<20} {hostname:<20} {os_string:<20} {open_ports:<20}"
+            )  # Updated code
+
+    def save_results(self, results, filename="scan-results.csv"):
+        """Saves the scan results to a CSV file."""
+        filename = filename or self.csv_filename  # Use default if not provided
+
+        try:
+            with open(filename, "w", newline="") as csvfile:
+                fieldnames = [
+                    "IP Address",
+                    "MAC Address",
+                    "Hostname",
+                    "OS Family",
+                    "OS Generation",
+                    "OS Vendor",
+                    "Open Ports",
+                ]  # All fields
+                writer = csv.DictWriter(
+                    csvfile, fieldnames=fieldnames, extrasaction="ignore"
+                )  # Ignore extra fields
+                writer.writeheader()
+
+                for result in results:
+                    os_info = result.get("os", {})  # Get OS details or an empty dict
+                    ports = result.get(
+                        "ports", []
+                    )  # Gets the ports list or empty list.
+                    open_ports_str = ", ".join(
+                        [str(p["portid"]) for p in ports if p.get("state") == "open"]
+                    )  # Extract open ports
+                    writer.writerow(
+                        {
+                            "IP Address": result.get("ip_address", ""),
+                            "MAC Address": result.get("mac_address", ""),
+                            "Hostname": result.get("hostname", ""),
+                            "OS Family": os_info.get("osfamily", ""),
+                            "OS Generation": os_info.get("osgen", ""),
+                            "OS Vendor": os_info.get("vendor", ""),
+                            "Open Ports": open_ports_str,  # Updated code to write open ports
+                        }
+                    )
+
+            logger.info(f"Scan results saved to: {filename}")
+
+        except OSError as e:  # Handle file errors
+            logger.error(f"Error saving results to file: {e}")
+        except Exception as e:  # Catch other errors
+            logger.error(f"Error saving CSV File: {e}")
+
+
+def print_scan_types():
+    print("Available Nmap Scan Types:")
+    for code, scan_name in NetworkScanner.SCAN_TYPES.items():  # Changed to SCAN_TYPES
+        print(f"{code}: {scan_name}")  # Print just the name, not arguments
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="""A comprehensive network scanner that combines ARP scanning for fast local network discovery and Nmap scanning for detailed port and service information.
+        """,
+        epilog="""Examples:
+          python networkscanner.py 192.168.1.1/24  # ARP and OS detection scan of network
+          python networkscanner.py 192.168.1.100 -p 80,443 -s 0  # SYN scan of ports 80 and 443 on a single host
+          python networkscanner.py -st  # Show available Nmap scan types
+          python networkscanner.py -i eth0 192.168.5.0/24 -p 22,80,443,30778  # Scan a different network on specific ports
+
+        For more details on scan types, run:  'python networkscanner.py -s help'
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    parser.add_argument(
+        "-i", "--interface", help="Specify the network interface to use for scanning."
+    )
+    parser.add_argument(
+        "targets",
+        nargs="*",
+        help="Specify target IP addresses, CIDR ranges, or hostnames (multiple targets can be space-separated).",
+    )  # Updated help text for targets.
+    parser.add_argument(
+        "-p",
+        "--ports",
+        help="Specify comma-separated port numbers or ranges (e.g., 80,443,1-1024). If not provided, common ports will be scanned.",
+    )
+    parser.add_argument(
+        "-s",
+        "--scan_type",
+        choices=list(NetworkScanner.SCAN_TYPES.keys()) + ["help"],
+        help="Specify the Nmap scan type. For available types, run with '-st' or '-s help'. Defaults to OS detection.",
+        default=NetworkScanner.DEFAULT_SCAN_TYPE,
+    )  # Updated help text for scan_type
+
+    parser.add_argument(
+        "-st",
+        "--show_scan_types",
+        action="store_true",
+        help="Display available Nmap scan types and exit.",
+    )
+
+    args = parser.parse_args()
+
+    if (
+        args.scan_type == "help"
+    ):  # Show help for scan types. This implements the special handling requested.
+        print_scan_types()
+        exit()
+
+    if args.show_scan_types:
+        print_scan_types()
+        exit()
+
+    if not args.targets:
+        parser.print_help()  # Print help if no targets provided
+        exit()
+
+    scanner = NetworkScanner(
+        args.interface,
+        args.targets,
+        args.ports,
+        (
+            args.scan_type
+            if args.scan_type != "help"
+            else NetworkScanner.DEFAULT_SCAN_TYPE
+        ),
+    )
+
+    try:
+        scan_results = scanner.scan()
+
+        if scan_results:
+            scanner.print_results(scan_results)
+            scanner.save_results(
+                scan_results
+            )  # Save to CSV (using default or specified filename)
+        else:
+            logger.warning("No scan results found.")
+
+    except KeyboardInterrupt:
+        print("\nScan interrupted.")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred: {e}")
+
+    # Test calls (You can expand these for more complete tests later):
+    # print(f"Default Interface: {scanner.interface}")
+    # print(f"Own IP: {scanner.own_ip}")
+    # print(f"Own MAC: {scanner.own_mac}")
+    # print("Targets:", scanner.targets)
+    # print("Ports:", scanner.ports)

@@ -1,5 +1,8 @@
 # networkexceptions.py
 
+class BluetoothSocketError(Exception):
+    pass  # Or add a more descriptive message:  def __init__(self, message): super().__init__(message)
+
 
 class NetworkError(Exception):  # A more general base class
     """Base class for exceptions related to network operations."""
