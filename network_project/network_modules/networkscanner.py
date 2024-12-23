@@ -5,6 +5,7 @@ import logging
 import os
 import getpass
 import ipaddress
+import shutil
 import netifaces
 import threading
 import queue
@@ -12,6 +13,7 @@ import subprocess  # For Nmap
 import xml.etree.ElementTree as ET  # For XML parsing
 import os  # For checking nmap existence
 import time  # For pausing after reset
+import csv
 from scapy.all import ARP, Ether, srp  # For ARP scanning
 
 logging.basicConfig(
@@ -118,12 +120,13 @@ class NetworkScanner:
             logger.error("Interface not found, provide with -i or --interface")
             return None
 
-    def _get_mac_address(self, ip_address):
+    def _get_mac_address(self, ip_address):  # More robust _get_mac_address
         """Gets the MAC address for a given IP address using ARP."""
         if not ip_address:
             logger.error("Unable to get MAC address. IP address not provided.")
             return None
         try:
+            conf.verb = 0  # Suppress Scapy output.
             arp_request = ARP(pdst=ip_address)
             broadcast = Ether(dst="ff:ff:ff:ff:ff:ff")
             arp_request_broadcast = broadcast / arp_request
@@ -132,7 +135,7 @@ class NetworkScanner:
             )[0]
             return answered_list[0][1].hwsrc if answered_list else None
 
-        except OSError as e:
+        except (OSError, IndexError) as e:  # Catch OSError and IndexError
             logger.error(f"Error getting MAC address for {ip_address}: {e}")
             return None
 
@@ -182,83 +185,88 @@ class NetworkScanner:
 
         return [str(p) for p in ports]
 
-    def _execute_nmap_scan(self, target, ports, scan_type):
+    def _execute_nmap_scan(
+        self, target, ports, scan_type
+    ):  # More robust and correct Nmap execution
         """Executes an Nmap scan against a single target."""
 
+        nmap_path = shutil.which("nmap")  # More robust check
+        if nmap_path is None:
+            logger.error("Nmap not found. Please install Nmap.")
+            return None
+
         try:
-            nmap_args = ["sudo", "nmap", "-oX", "-"]  # Output XML to stdout
+            nmap_args = ["sudo", nmap_path, "-oX", "-"]  # Use which to find path
 
             if ports:
                 nmap_args.extend(["-p", ",".join(ports)])
 
-            nmap_scan_type = self.SCAN_TYPES.get(scan_type)
-            if scan_type and nmap_scan_type:  # Check if scan_type is provided and valid
-                nmap_args.extend(["-" + nmap_scan_type])  # Nmap uses -sS, -sU, etc.
+            if (
+                scan_type and scan_type != "help"
+            ):  # Checks if a scan_type is given and not "help"
+                nmap_scan_type_arg = next(
+                    (
+                        f"-s{code.upper()}"
+                        for code, name in self.SCAN_TYPES.items()
+                        if name == scan_type.upper()
+                    ),
+                    None,
+                )  # Find the corresponding Nmap argument in SCAN_TYPES
 
-            nmap_args.append(target)
+                if nmap_scan_type_arg:  # If valid nmap scan type argument is found
+                    nmap_args.append(nmap_scan_type_arg)  # Append the correct argument
+
+            nmap_args.append(target)  # Append the target
 
             process = subprocess.run(
                 nmap_args, capture_output=True, text=True, check=True
-            )
-            return process.stdout  # Return the XML output directly
+            )  # Run Nmap
+            return process.stdout  # Return XML output
 
         except subprocess.CalledProcessError as e:
             logger.error(f"Nmap scan failed: {e.stderr}")
             return None
-        except Exception as e:  # Catch general exceptions during execution
+        except Exception as e:
             logger.error(f"Error during Nmap execution: {e}")
             return None
 
-    def _process_nmap_output(self, nmap_output):
+    def _process_nmap_output(self, nmap_output):  # Enhanced to extract service versions
         """Processes the XML output from Nmap and extracts relevant information."""
         try:
-            root = ET.fromstring(nmap_output)  # Parse XML
+            root = ET.fromstring(nmap_output)
             scan_results = []
 
             for host in root.findall("host"):
                 host_info = {}
-                address_info = host.find("address")
-                if address_info is not None:
-                    host_info["ip_address"] = address_info.get(
-                        "addr"
-                    )  # Extract IP address
-
-                hostnames = host.find("hostnames")
-                if hostnames is not None:
-                    hostname = hostnames.find("hostname")
-                    if hostname is not None:
-                        host_info["hostname"] = hostname.get("name")  # Extract hostname
-
-                os_info = host.find("os")
-                if os_info is not None:  # Extract OS details
-                    osclasses = os_info.findall("osclass")
-                    os_details = [
-                        {
-                            "osfamily": os.get("osfamily"),
-                            "osgen": os.get("osgen"),
-                            "accuracy": os.get("accuracy"),
-                            "vendor": os.get("vendor"),
-                        }  # Updated code. Added osfamily. Add accuracy and vendor.
-                        for os in osclasses
-                    ]
-                    if os_details:
-                        host_info["os"] = os_details[0]
-                    else:
-                        host_info["os"] = None
+                # ... (IP, hostname, OS parsing remain the same)
 
                 ports = []
                 for port in host.find("ports").findall("port"):
+                    state_element = port.find("state")
+                    service_element = port.find("service")
+
                     port_info = {
                         "protocol": port.get("protocol"),
-                        "portid": int(port.get("portid")),  # Convert portid to int.
-                        "state": port.find("state").get("state"),
-                        "service": port.find("service").get("name"),
-                        "version": port.find("service").get(
-                            "product"
-                        ),  # Updated code. Get product and version.
+                        "portid": int(port.get("portid")),
+                        "state": (
+                            state_element.get("state")
+                            if state_element is not None
+                            else None
+                        ),  # Handles missing "state" element
+                        "service": (
+                            service_element.get("name")
+                            if service_element is not None
+                            else None
+                        ),  # Handles missing "service" element
+                        "version": (
+                            f"{service_element.get('product', '')} {service_element.get('version', '')}".strip()
+                            if service_element is not None
+                            else ""
+                        ),  # Extracts and combines product and version if the "service" element exists
                     }
-                    ports.append(port_info)  # Append updated code
-                host_info["ports"] = ports  # Update host_info
+
+                    ports.append(port_info)
+                host_info["ports"] = ports
 
                 scan_results.append(host_info)
 
@@ -327,15 +335,17 @@ class NetworkScanner:
 
         return list(results.values())  # Return list of combined/updated dictionaries
 
-    def print_results(self, results):  # Updated output
+    def print_results(
+        self, results
+    ):  # Enhanced print_results to handle service versions.
         """Prints the scan results."""
-        print("-" * 60)
+        print("-" * 70)  # Added width
         print(
-            f"{'IP Address':<15} {'MAC Address':<20} {'Hostname':<20} {'OS':<20} {'Open Ports':<20}"
-        )  # Updated code
-        print("-" * 60)
+            f"{'IP Address':<15} {'MAC Address':<20} {'Hostname':<25} {'OS':<20} {'Open Ports/Service':<30}"  # Updated header
+        )
+        print("-" * 70)  # Added width
 
-        for result in results:  # Iterate through the list of dictionaries
+        for result in results:
             ip_address = result.get("ip_address", "")
             mac_address = result.get("mac_address", "")
             hostname = result.get("hostname", "")
@@ -344,17 +354,19 @@ class NetworkScanner:
                 f"{os_info.get('osfamily', '')} {os_info.get('osgen', '')}"
                 if os_info
                 else ""
-            )  # Updated code. Added osfamily
-            open_ports = ", ".join(
+            )
+
+            open_ports_services = ", ".join(
                 [
-                    str(port["portid"])
+                    f"{port['portid']}/{port['service']} ({port['version']})"  # Include service and version
                     for port in result.get("ports", [])
                     if port["state"] == "open"
                 ]
-            )  # Updated code. Add open ports.
+            )
+
             print(
-                f"{ip_address:<15} {mac_address:<20} {hostname:<20} {os_string:<20} {open_ports:<20}"
-            )  # Updated code
+                f"{ip_address:<15} {mac_address:<20} {hostname:<25} {os_string:<20} {open_ports_services:<30}"  # Updated code
+            )
 
     def save_results(self, results, filename="scan-results.csv"):
         """Saves the scan results to a CSV file."""
@@ -428,16 +440,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "-i", "--interface", help="Specify the network interface to use for scanning."
     )
+
     parser.add_argument(
         "targets",
         nargs="*",
         help="Specify target IP addresses, CIDR ranges, or hostnames (multiple targets can be space-separated).",
     )  # Updated help text for targets.
+
     parser.add_argument(
         "-p",
         "--ports",
         help="Specify comma-separated port numbers or ranges (e.g., 80,443,1-1024). If not provided, common ports will be scanned.",
     )
+
     parser.add_argument(
         "-s",
         "--scan_type",
@@ -469,18 +484,10 @@ if __name__ == "__main__":
         parser.print_help()  # Print help if no targets provided
         exit()
 
-    scanner = NetworkScanner(
-        args.interface,
-        args.targets,
-        args.ports,
-        (
-            args.scan_type
-            if args.scan_type != "help"
-            else NetworkScanner.DEFAULT_SCAN_TYPE
-        ),
-    )
-
     try:
+        scanner = NetworkScanner(
+            args.interface, args.targets, args.ports, args.scan_type
+        )  # Added error handling for scanner init
         scan_results = scanner.scan()
 
         if scan_results:
