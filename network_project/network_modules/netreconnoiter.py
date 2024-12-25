@@ -88,7 +88,13 @@ class NetworkScanner:
         quiet: bool = False,
         log_file: str = None,
     ):
-        self.interface = interface
+        self.interface = interface or self._get_default_interface()  # Get interface
+
+        if not self.interface:
+            raise ValueError(
+                "No network interface specified and could not determine a default interface."
+            )  # No interface found; stop.
+
         self.targets = self._parse_targets(targets) if targets else []
 
         if not self.targets:
@@ -208,7 +214,7 @@ class NetworkScanner:
             nmap_args = [self.nmap_path, "-oX", "-"]
 
             if ports:
-                nmap_args.extend(["-p", ",".join(ports)])
+                nmap_args.extend(["-p", ",".join(map(str, ports))])
 
             if scan_type:
                 nmap_scan_type_arg = self.SCAN_TYPES.get(scan_type.upper())
