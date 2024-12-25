@@ -6,6 +6,7 @@ import os
 import getpass
 import ipaddress
 import shutil
+from typing import List
 import netifaces
 import threading
 import queue
@@ -79,12 +80,20 @@ class NetworkScanner:
         "13": "BET",
         "14": "CONNECT",
     }
-    DEFAULT_SCAN_TYPE = "11"  # OS detection
+    DEFAULT_SCAN_TYPE = "SYN"  # OS detection
 
     def __init__(
-        self, interface=None, targets=None, ports=None, scan_type=DEFAULT_SCAN_TYPE
+        self,
+        interface: str = None,  # Type hint and default value
+        targets: List[str] = None,  # Type hint and default value
+        ports: List[str] = None,  # Type hint and default value
+        scan_type: str = DEFAULT_SCAN_TYPE,  # Type hint and default value
+        nmap_path: str = "nmap",  # Type hint and default value
+        threads: int = 10,  # Type hint and default value (not currently used)
+        quiet: bool = False,  # Type hint and default value
+        log_file: str = None,  # Type hint and default value
     ):
-        self.interface = interface or self._get_default_interface()
+        self.interface = interface
         self.own_ip = self._get_ip_address()
         self.own_mac = self._get_mac_address(self.own_ip)
         self.targets = self._parse_targets(targets) if targets else []
@@ -92,6 +101,30 @@ class NetworkScanner:
         self.scan_type = scan_type
         self._lock = threading.Lock()
         self.csv_filename = "network_scan_results.csv"
+        self.setup_logging()
+
+    def setup_logging(self):
+        logger.setLevel(logging.INFO)
+
+        formatter = logging.Formatter(
+            "%(asctime)s - %(levelname)s - %(message)s"
+        )  # Define formatter once
+
+        if self.log_file:  # Always add file handler if log_file is specified.
+
+            file_handler = logging.FileHandler(self.log_file)
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+
+        if not self.quiet:  # Add console handler if NOT quiet
+
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(formatter)  # Use same formatter.
+            logger.addHandler(console_handler)
+
+        elif not self.log_file:  # Quiet mode, and NO log file given, add NullHandler
+
+            logger.addHandler(logging.NullHandler())
 
     def _get_default_interface(self):
         """Gets the default network interface."""
@@ -119,23 +152,33 @@ class NetworkScanner:
             logger.error("Interface not found, provide with -i or --interface")
             return None
 
-    def _get_mac_address(self, ip_address):  # More robust _get_mac_address
-        """Gets the MAC address for a given IP address using ARP."""
+    async def _get_mac_address(self, ip_address):
         if not ip_address:
-            logger.error("Unable to get MAC address. IP address not provided.")
+            logger.error("IP not provided for MAC lookup.")  # Good error message
             return None
-        try:
-            conf.verb = 0  # Suppress Scapy output.
-            arp_request = ARP(pdst=ip_address)
-            broadcast = Ether(dst="ff:ff:ff:ff:ff:ff")
-            arp_request_broadcast = broadcast / arp_request
-            answered_list = srp(
-                arp_request_broadcast, timeout=2, verbose=False, iface=self.interface
-            )[0]
-            return answered_list[0][1].hwsrc if answered_list else None
 
-        except (OSError, IndexError) as e:  # Catch OSError and IndexError
-            logger.error(f"Error getting MAC address for {ip_address}: {e}")
+        try:
+            conf.verb = 0
+
+            # Explicitly specify interface for ARP scan. Use provided interface or get default interface.
+            iface = self.interface or self._get_default_interface()
+            if (
+                not iface
+            ):  # If no default interface specified, and interface is not provided, we need to log an error.
+                raise OSError(
+                    "No network interface specified or could not be determined."
+                )
+
+            ans, unans = srp(
+                Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip_address),
+                timeout=2,
+                verbose=False,
+                iface=iface,  # Use specified or default interface
+            )
+            return ans[0][1].hwsrc if ans else None
+        except OSError as e:  # Catch potential errors if interface is not correct
+            if not self.quiet:
+                logger.error(f"Error during ARP scan: {e}")
             return None
 
     def _parse_targets(self, targets_str):
@@ -277,6 +320,27 @@ class NetworkScanner:
                 f"Error parsing Nmap XML output: {e}"
             )  # Logs XML parsing errors.
             return None
+
+    def _parse_os_info(self, host):
+        os_info = {}
+        os_element = host.find("os")
+
+        if os_element is not None:  # Corrected logic - simplified
+            osmatch_element = os_element.find("osmatch")
+            if osmatch_element is not None:
+                os_info["osfamily"] = osmatch_element.get("name")
+                os_info["osgen"] = osmatch_element.get("accuracy")
+
+            osclass_element = os_element.find(
+                "osclass"
+            )  # Look for osclass, regardless of osmatch
+            if osclass_element is not None:
+                os_info["type"] = osclass_element.get("type")
+                os_info["vendor"] = osclass_element.get("vendor")
+                os_info.setdefault("osfamily", osclass_element.get("osfamily"))
+                os_info.setdefault("osgen", osclass_element.get("osgen"))
+
+        return os_info
 
     def _arp_scan(self, target):
         """Performs an ARP scan for a single target."""
@@ -506,8 +570,8 @@ if __name__ == "__main__":
         logger.error(f"An unexpected error occurred: {e}")
 
     # Test calls (You can expand these for more complete tests later):
-    # print(f"Default Interface: {scanner.interface}")
-    # print(f"Own IP: {scanner.own_ip}")
-    # print(f"Own MAC: {scanner.own_mac}")
-    # print("Targets:", scanner.targets)
-    # print("Ports:", scanner.ports)
+    print(f"Default Interface: {scanner.interface}")
+    print(f"Own IP: {scanner.own_ip}")
+    print(f"Own MAC: {scanner.own_mac}")
+    print("Targets:", scanner.targets)
+    print("Ports:", scanner.ports)
