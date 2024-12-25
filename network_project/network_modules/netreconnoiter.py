@@ -17,7 +17,7 @@ from scapy.all import ARP, Ether, srp, conf
 logger = logging.getLogger(__name__)
 
 
-class NetworkScanner:
+class Netreconnoiter:
     COMMON_PORTS = [
         20,
         21,
@@ -499,8 +499,8 @@ async def main():
     parser.add_argument(
         "-s",
         "--scan_type",
-        choices=list(NetworkScanner.SCAN_TYPES.keys()) + ["help"],
-        default=NetworkScanner.DEFAULT_SCAN_TYPE,
+        choices=list(Netreconnoiter.SCAN_TYPES.keys()) + ["help"],
+        default=Netreconnoiter.DEFAULT_SCAN_TYPE,
         help="Nmap scan type. Use -st for available types.",
     )
     parser.add_argument(
@@ -532,7 +532,7 @@ async def main():
     args = parser.parse_args()
 
     if args.show_scan_types or args.scan_type == "help":
-        print_scan_types(NetworkScanner.SCAN_TYPES)
+        print_scan_types(Netreconnoiter.SCAN_TYPES)
         return
 
     scan_type = "OS" if args.os_detection else args.scan_type
@@ -542,7 +542,7 @@ async def main():
         return
 
     try:
-        scanner = NetworkScanner(
+        scanner = Netreconnoiter(
             args.interface,
             args.targets,
             args.ports,

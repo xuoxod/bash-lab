@@ -1,2 +1,2 @@
 IP Address,MAC Address,Hostname,OS Family,OS Generation,OS Vendor,Open Ports
-192.168.1.158,04:ea:56:9d:4f:cc,xuaux,Linux 4.15 - 5.8,97,,30778
+192.168.1.1,78:67:0e:ba:7e:74,CR1000A.mynetworksettings.com,Linux 5.0 - 5.4,100,,"53, 80, 443, 8080"
