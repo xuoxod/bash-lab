@@ -7,6 +7,7 @@ import logging
 import os
 import ipaddress
 import shutil
+from typing import List
 import netifaces
 import subprocess
 import xml.etree.ElementTree as ET
@@ -78,14 +79,14 @@ class NetworkScanner:
 
     def __init__(
         self,
-        interface,
-        targets,
-        ports,
-        scan_type,
-        nmap_path="nmap",
-        threads=10,
-        quiet=False,
-        log_file=None,
+        interface: str = None,
+        targets: List[str] = None,
+        ports: List[str] = None,
+        scan_type: str = DEFAULT_SCAN_TYPE,
+        nmap_path: str = "nmap",
+        threads: int = 10,
+        quiet: bool = False,
+        log_file: str = None,
     ):
         self.interface = interface
         self.targets = self._parse_targets(targets) if targets else []
@@ -107,31 +108,21 @@ class NetworkScanner:
 
         self.setup_logging()  # Set up logging after initializing attributes
 
-    def setup_logging(self):  # Corrected: No redundancy.
+    def setup_logging(self):
         logger.setLevel(logging.INFO)
+        formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 
-        if self.quiet:
-            if self.log_file:
-                handler = logging.FileHandler(self.log_file)
-                formatter = logging.Formatter(
-                    "%(asctime)s - %(levelname)s - %(message)s"
-                )
-                handler.setFormatter(formatter)
-                logger.addHandler(handler)
-            else:
-                logger.addHandler(
-                    logging.NullHandler()
-                )  # Disables logging if quiet and no log file specified.
-        else:  # Not quiet
-            handler = logging.StreamHandler()  # Log to console
-            formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
+        if self.log_file:
+            file_handler = logging.FileHandler(self.log_file)
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
 
-            if self.log_file:  # Log to file as well if specified
-                file_handler = logging.FileHandler(self.log_file)
-                file_handler.setFormatter(formatter)
-                logger.addHandler(file_handler)
+        if not self.quiet:
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(formatter)
+            logger.addHandler(console_handler)
+        elif not self.log_file:  # If quiet and no log file, disable logging.
+            logger.addHandler(logging.NullHandler())
 
     def _get_default_interface(self):  # Corrected: No redundancy
         try:
@@ -318,7 +309,7 @@ class NetworkScanner:
             logger.exception(f"Unexpected error in processing Nmap output: {e}")
             return None
 
-    def _parse_os_info(self, host):  # Corrected logic: Prioritize osmatch
+    def _parse_os_info(self, host):  # Corrected logic:  Use setdefault.
         os_info = {}
         os_element = host.find("os")
 
@@ -327,18 +318,17 @@ class NetworkScanner:
             if osmatch_element is not None:
                 os_info["osfamily"] = osmatch_element.get("name")
                 os_info["osgen"] = osmatch_element.get("accuracy")
-            # Removed elif.  If osmatch isn't present, osclass *will* be used as fallback now.
-            osclass_element = os_element.find("osclass")
 
+            osclass_element = os_element.find("osclass")  # Always try to get osclass
             if osclass_element is not None:
                 os_info["type"] = osclass_element.get("type")
                 os_info["vendor"] = osclass_element.get("vendor")
-
-                # Only fill these in if they are *not already present* (from osmatch)
                 os_info.setdefault(
                     "osfamily", osclass_element.get("osfamily")
-                )  # Correctly prioritize osmatch
-                os_info.setdefault("osgen", osclass_element.get("osgen"))
+                )  # Use setdefault.  Don't overwrite existing values.
+                os_info.setdefault(
+                    "osgen", osclass_element.get("osgen")
+                )  # Use setdefault. Don't overwrite existing values.
 
         return os_info
 
