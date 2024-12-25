@@ -368,6 +368,13 @@ class NetworkScanner:
         arp_tasks = [self._arp_scan(target) for target in self.targets]
         arp_results = await asyncio.gather(*arp_tasks)
 
+        if self.nmap_path:  # Only run nmap tasks if we have nmap available.
+            nmap_tasks = [
+                self._execute_nmap_scan(target, self.ports, self.scan_type)
+                for target in self.targets
+            ]
+            nmap_outputs = await asyncio.gather(*nmap_tasks)
+
         for arp_result in arp_results:
             if arp_result:
                 results[arp_result["ip_address"]] = arp_result
