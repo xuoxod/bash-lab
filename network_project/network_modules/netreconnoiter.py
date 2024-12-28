@@ -13,6 +13,8 @@ import subprocess
 import xml.etree.ElementTree as ET
 import csv
 from scapy.all import ARP, Ether, srp, conf
+from prettyprint import PrettyPrint  # Import the PrettyPrint class from prettyprint.py
+from textcolors import TextColors  # Import the TextColors class from textcolors.py
 
 logger = logging.getLogger(__name__)
 
@@ -400,7 +402,7 @@ class Netreconnoiter:
 
         return list(results.values())
 
-    def print_results(self, results):
+    def print_results_(self, results):
         if not self.quiet:
             print("-" * 70)
             print(
@@ -427,6 +429,39 @@ class Netreconnoiter:
                 )
                 print(
                     f"{ip_address:<15} {mac_address:<20} {hostname:<25} {os_string:<20} {open_ports_services:<30}"
+                )
+
+    def print_results(self, results):
+        with PrettyPrint(title="[bold bright_cyan]Network Scan Results[/]") as pp:
+            pp.add_column("IP Address", style="green")
+            pp.add_column("MAC Address", style="cyan")
+            pp.add_column("Hostname", style="magenta")
+            pp.add_column("OS", style="blue")
+            pp.add_column("Open Ports/Service (Version)", style="yellow")
+
+            for result in results:
+                ip_address = result.get("ip_address", "")
+                mac_address = result.get("mac_address", "")
+                hostname = result.get("hostname", "")
+                os_info = result.get("os", {})
+                os_string = (
+                    f"{os_info.get('osfamily', '')} {os_info.get('osgen', '')}"
+                    if os_info
+                    else ""
+                )
+                open_ports_services = (
+                    ", ".join(
+                        [
+                            f"{port['portid']}/{port.get('service', '')} ({port.get('version', '')})"  # Include service and version
+                            for port in result.get("ports", [])
+                            if port.get("state") == "open"
+                        ]
+                    )
+                    or "None"
+                )  # Handle cases where there are no open ports
+
+                pp.add_row(
+                    ip_address, mac_address, hostname, os_string, open_ports_services
                 )
 
     def save_results(self, results, filename="scan-results.json", json_format=False):
